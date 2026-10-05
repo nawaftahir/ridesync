@@ -2,6 +2,15 @@
 
 Flutter project.
 
+Dependencies:  
+flutter_map  
+geolocator  
+provider  
+http  
+latlong2  
+mysql_client  
+
+
 ## Getting Started
 
 This project is a starting point for a Flutter application.
