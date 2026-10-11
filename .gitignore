@@ -46,3 +46,8 @@ app.*.map.json
 
 # Widget Preview related
 .widget_preview/
+
+# Files Flutter generates on each machine.
+/linux/
+/macos/
+devtools_options.yaml
