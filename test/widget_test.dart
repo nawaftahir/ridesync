@@ -1,30 +1,34 @@
-// This is a basic Flutter widget test.
+// =============================================================================
+// test/widget_test.dart
 //
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
+// A basic smoke test — just checks that the app starts without crashing
+// and that the HomeScreen shows the expected buttons.
+//
+// WHAT IS A TEST?
+//   A test is code that checks your code works correctly.
+//   Flutter's WidgetTester pretends to be a phone and "runs" the app
+//   without needing a real device. Then we use `expect` to assert things
+//   we know should be true.
+//
+// HOW TO RUN TESTS:
+//   flutter test
+// =============================================================================
 
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-
 import 'package:ridesync/main.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
+  testWidgets('HomeScreen renders without crashing', (tester) async {
+    // Start the full app — same as pressing Run on a real device.
+    await tester.pumpWidget(const RideSyncApp());
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
+    // Wait for any async startup work to finish.
+    await tester.pumpAndSettle();
 
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
-    await tester.pump();
-
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+    // The home screen should show the app name and its three main buttons.
+    expect(find.text('RideSync'),      findsOneWidget);
+    expect(find.text('Host a ride'),   findsOneWidget);
+    expect(find.text('Join with a code'), findsOneWidget);
+    expect(find.text('Sign up or log in'), findsOneWidget);
   });
 }

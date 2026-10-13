@@ -1,17 +1,17 @@
 import 'package:flutter/material.dart';
-import 'package:ridesync/screens/wip_screen.dart';
+import 'package:ridesync/screens/host_ride_screen.dart';
+import 'package:ridesync/screens/join_ride_screen.dart';
+import 'package:ridesync/screens/login_screen.dart';
 
-// The first screen of the app. It has three options. Each one opens a
-// work-in-progress page until we build the real screen.
+// The first screen of the app.
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
 
-  // Opens a WipScreen on top of this screen. The back button comes for free.
-  void _openWip(BuildContext context, String title, String plan) {
+  // A small helper to avoid repeating MaterialPageRoute boilerplate.
+  // `Widget Function()` means: a function that returns a Widget (the screen).
+  void _go(BuildContext context, Widget screen) {
     Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (context) => WipScreen(title: title, plan: plan),
-      ),
+      MaterialPageRoute(builder: (_) => screen),
     );
   }
 
@@ -49,38 +49,25 @@ class HomeScreen extends StatelessWidget {
               ),
               const SizedBox(height: 48),
 
-              // Option 1: start a new ride and get a code to share.
-              // Button size and shape come from the theme (app_theme.dart).
+              // Option 1: start a new ride → HostRideScreen.
               FilledButton.icon(
-                onPressed: () => _openWip(
-                  context,
-                  'Host a ride',
-                  'Create a ride and get a code to share with your group.',
-                ),
+                onPressed: () => _go(context, const HostRideScreen()),
                 icon: const Icon(Icons.add_road),
                 label: const Text('Host a ride'),
               ),
               const SizedBox(height: 12),
 
-              // Option 2: join someone else's ride with their code.
+              // Option 2: join with a code → JoinRideScreen.
               OutlinedButton.icon(
-                onPressed: () => _openWip(
-                  context,
-                  'Join with a code',
-                  'Enter the code from the host to join their ride.',
-                ),
+                onPressed: () => _go(context, const JoinRideScreen()),
                 icon: const Icon(Icons.group_add),
                 label: const Text('Join with a code'),
               ),
               const SizedBox(height: 12),
 
-              // Option 3: accounts. This comes later, after the main screens.
+              // Option 3: login / sign up → LoginScreen.
               TextButton.icon(
-                onPressed: () => _openWip(
-                  context,
-                  'Sign up',
-                  'Create an account and log in. Currently WIP',
-                ),
+                onPressed: () => _go(context, const LoginScreen()),
                 icon: const Icon(Icons.person_add),
                 label: const Text('Sign up or log in'),
               ),
