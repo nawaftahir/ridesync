@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:ridesync/mock/mock_rides.dart';
+import 'package:ridesync/repositories/ride_repository.dart';
 import 'package:ridesync/screens/ride_map_screen.dart';
 
 class JoinRideScreen extends StatefulWidget {
@@ -10,6 +10,8 @@ class JoinRideScreen extends StatefulWidget {
 }
 
 class _JoinRideScreenState extends State<JoinRideScreen> {
+  static const _rideRepository = RideRepository();
+
   final _codeController = TextEditingController();
   String? _errorMessage;
   bool _isLoading = false;
@@ -24,7 +26,7 @@ class _JoinRideScreenState extends State<JoinRideScreen> {
     // Simulates a network round-trip. Replace with a real API call later.
     await Future.delayed(const Duration(milliseconds: 800));
 
-    final ride = findMockRide(_codeController.text);
+    final ride = _rideRepository.findByCode(_codeController.text);
 
     // `mounted` check: if the user left this screen during the delay, stop.
     if (!mounted) return;
@@ -39,7 +41,9 @@ class _JoinRideScreenState extends State<JoinRideScreen> {
       return;
     }
 
-    setState(() => _isLoading = false);
+    setState(() {
+      _isLoading = false;
+    });
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => RideMapScreen(
@@ -68,10 +72,7 @@ class _JoinRideScreenState extends State<JoinRideScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text(
-              'Enter Code from a host to join.',
-              style: text.bodyLarge,
-            ),
+            Text('Enter Code from a host to join.', style: text.bodyLarge),
             const SizedBox(height: 24),
 
             TextField(

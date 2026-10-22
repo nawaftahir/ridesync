@@ -1,4 +1,5 @@
 import 'dart:math';
+
 import 'package:flutter/material.dart';
 import 'package:ridesync/screens/ride_map_screen.dart';
 
@@ -18,10 +19,14 @@ class _HostRideScreenState extends State<HostRideScreen> {
 
   // Builds a random 6-letter uppercase code, e.g. "KXMQTB".
   // ASCII 65 = 'A', so 65 + 0…25 gives A…Z.
-  String _generateCode() => List.generate(
-        6,
-        (_) => String.fromCharCode(65 + Random().nextInt(26)),
-      ).join();
+  String _generateCode() {
+    final random = Random();
+    String code = '';
+    for (int i = 0; i < 6; i++) {
+      code += String.fromCharCode(65 + random.nextInt(26));
+    }
+    return code;
+  }
 
   void _onGenerateTapped() {
     if (_destinationController.text.trim().isEmpty) {
@@ -31,7 +36,9 @@ class _HostRideScreenState extends State<HostRideScreen> {
       return;
     }
     // setState() tells Flutter to redraw — the code card will appear.
-    setState(() => _joinCode = _generateCode());
+    setState(() {
+      _joinCode = _generateCode();
+    });
   }
 
   void _onStartRideTapped() {
@@ -87,9 +94,10 @@ class _HostRideScreenState extends State<HostRideScreen> {
             ),
             const SizedBox(height: 24),
 
-            // `if (condition) ...[...]` adds widgets to the Column only when
-            // the condition is true — here, only after a code is generated.
-            if (_joinCode != null) ...[
+            // `if` inside a list: the widget is only added when the condition
+            // is true. Here, the code card and Start button appear only after
+            // a code is generated.
+            if (_joinCode != null)
               Card(
                 color: colors.primaryContainer,
                 child: Padding(
@@ -113,14 +121,13 @@ class _HostRideScreenState extends State<HostRideScreen> {
                   ),
                 ),
               ),
-              const SizedBox(height: 20),
-
+            if (_joinCode != null) const SizedBox(height: 20),
+            if (_joinCode != null)
               FilledButton.icon(
                 onPressed: _onStartRideTapped,
                 icon: const Icon(Icons.play_arrow_rounded),
                 label: const Text('Start Ride'),
               ),
-            ],
           ],
         ),
       ),

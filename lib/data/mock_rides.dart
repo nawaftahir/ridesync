@@ -30,11 +30,3 @@ const List<MockRide> kMockRides = [
     distanceKm: 14.5,
   ),
 ];
-
-// Returns the ride matching [code], or null if not found.
-// .toUpperCase() makes it case-insensitive.
-MockRide? findMockRide(String code) {
-  return kMockRides
-      .where((r) => r.code == code.toUpperCase().trim())
-      .firstOrNull;
-}

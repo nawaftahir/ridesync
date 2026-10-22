@@ -12,7 +12,7 @@ const List<RiderPosition> kMockRiderPositions = [
     latitude: 33.7215,
     longitude: 73.0433,
     speedKmh: 55,
-    headingDegrees: 90,   // 0=North 90=East 180=South 270=West
+    headingDegrees: 90,
     batteryPercent: 80,
     ageSeconds: 4,
   ),
@@ -22,7 +22,7 @@ const List<RiderPosition> kMockRiderPositions = [
     longitude: 73.0460,
     speedKmh: 50,
     headingDegrees: 85,
-    batteryPercent: null, // null = device didn't report battery
+    batteryPercent: null,
     ageSeconds: 6,
   ),
   RiderPosition(
@@ -32,6 +32,6 @@ const List<RiderPosition> kMockRiderPositions = [
     speedKmh: 0,
     headingDegrees: 0,
     batteryPercent: 15,
-    ageSeconds: 95, // > 60 → isStale = true → red pin + "Signal lost"
+    ageSeconds: 95,
   ),
 ];

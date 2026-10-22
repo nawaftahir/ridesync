@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
-import 'package:ridesync/mock/mock_map_data.dart';
+import 'package:ridesync/data/mock_map_data.dart';
 import 'package:ridesync/models/rider_position.dart';
+import 'package:ridesync/repositories/rider_repository.dart';
 import 'package:ridesync/screens/convoy_screen.dart';
 
 class RideMapScreen extends StatelessWidget {
@@ -11,36 +12,46 @@ class RideMapScreen extends StatelessWidget {
     required this.joinCode,
     required this.destination,
     required this.isHost,
+    this.riderRepository = const RiderRepository(),
   });
 
-  final String joinCode;    // shown as a chip in the app bar
+  final String joinCode; // shown as a chip in the app bar
   final String destination; // shown as the app bar title
-  final bool isHost;        // true = show the "End Ride" button
+  final bool isHost; // true = show the "End Ride" button
+  final RiderRepository riderRepository;
 
   // Turns RiderPosition list → flutter_map Marker list.
   // Blue pin = active, red pin = signal lost (ageSeconds > 60).
   List<Marker> _buildMarkers(List<RiderPosition> positions) {
-    return positions.map((rp) {
-      final color = rp.isStale ? Colors.redAccent : Colors.blueAccent;
-      return Marker(
-        point: rp.point,
-        width: 44,
-        height: 44,
-        child: Tooltip(
-          message: '${rp.rider.name} · ${rp.speedKmh.round()} km/h',
-          child: CircleAvatar(
-            backgroundColor: color,
-            child: Text(
-              rp.rider.initial,
-              style: const TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.bold,
+    final markers = <Marker>[];
+
+    for (int i = 0; i < positions.length; i++) {
+      final position = positions[i];
+      final color = position.isStale ? Colors.redAccent : Colors.blueAccent;
+      markers.add(
+        Marker(
+          point: position.point,
+          width: 44,
+          height: 44,
+          child: Tooltip(
+            message:
+                '${position.rider.name} · ${position.speedKmh.round()} km/h',
+            child: CircleAvatar(
+              backgroundColor: color,
+              child: Text(
+                position.rider.initial,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
             ),
           ),
         ),
       );
-    }).toList();
+    }
+
+    return markers;
   }
 
   @override
@@ -73,11 +84,10 @@ class RideMapScreen extends StatelessWidget {
             children: [
               // TileLayer fetches map tiles from OpenStreetMap (free, no key).
               TileLayer(
-                urlTemplate:
-                    'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                 userAgentPackageName: 'com.example.ridesync',
               ),
-              MarkerLayer(markers: _buildMarkers(kMockRiderPositions)),
+              MarkerLayer(markers: _buildMarkers(riderRepository.positions)),
             ],
           ),
 
@@ -93,12 +103,11 @@ class RideMapScreen extends StatelessWidget {
                 children: [
                   Chip(
                     avatar: const Icon(Icons.people_outline, size: 18),
-                    label: Text('${kMockRiderPositions.length} riders'),
+                    label: Text('${riderRepository.positions.length} riders'),
                   ),
                   const SizedBox(width: 12),
                   Chip(
-                    avatar: Icon(Icons.circle,
-                        size: 10, color: colors.primary),
+                    avatar: Icon(Icons.circle, size: 10, color: colors.primary),
                     label: Text(
                       'Active',
                       style: text.bodySmall?.copyWith(color: colors.primary),
@@ -127,7 +136,7 @@ class RideMapScreen extends StatelessWidget {
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => Navigator.of(context).push(
           MaterialPageRoute(
-            builder: (_) => ConvoyScreen(riders: kMockRiderPositions),
+            builder: (_) => ConvoyScreen(riders: riderRepository.positions),
           ),
         ),
         icon: const Icon(Icons.people),

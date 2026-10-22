@@ -8,11 +8,8 @@ class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
 
   // A small helper to avoid repeating MaterialPageRoute boilerplate.
-  // `Widget Function()` means: a function that returns a Widget (the screen).
   void _go(BuildContext context, Widget screen) {
-    Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => screen),
-    );
+    Navigator.of(context).push(MaterialPageRoute(builder: (_) => screen));
   }
 
   @override

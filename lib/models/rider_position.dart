@@ -20,7 +20,12 @@ class RiderPosition {
   final int? batteryPercent;
   final int ageSeconds;
 
-  LatLng get point => LatLng(latitude, longitude);
+  LatLng get point {
+    return LatLng(latitude, longitude);
+  }
 
-  bool get isStale => ageSeconds > 60; //check rider inactive disconnected
+  // A rider is "stale" (signal lost) if their last update is over 60s old.
+  bool get isStale {
+    return ageSeconds > 60;
+  }
 }

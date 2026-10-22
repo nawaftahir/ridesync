@@ -11,10 +11,10 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  bool _isLogin = true;        // toggles between Login and Sign Up
+  bool _isLogin = true; // toggles between Login and Sign Up
   bool _obscurePassword = true; // hides/shows password text
 
-  final _emailController    = TextEditingController();
+  final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
 
   void _onContinueTapped() {
@@ -80,8 +80,11 @@ class _LoginScreenState extends State<LoginScreen> {
                         : Icons.visibility_outlined,
                   ),
                   // Toggle the password visibility with setState.
-                  onPressed: () =>
-                      setState(() => _obscurePassword = !_obscurePassword),
+                  onPressed: () {
+                    setState(() {
+                      _obscurePassword = !_obscurePassword;
+                    });
+                  },
                 ),
               ),
             ),
@@ -95,7 +98,11 @@ class _LoginScreenState extends State<LoginScreen> {
 
             // Switches between Log In and Sign Up mode.
             TextButton(
-              onPressed: () => setState(() => _isLogin = !_isLogin),
+              onPressed: () {
+                setState(() {
+                  _isLogin = !_isLogin;
+                });
+              },
               child: Text(
                 _isLogin
                     ? "Don't have an account?  Sign up"

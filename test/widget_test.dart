@@ -26,8 +26,8 @@ void main() {
     await tester.pumpAndSettle();
 
     // The home screen should show the app name and its three main buttons.
-    expect(find.text('RideSync'),      findsOneWidget);
-    expect(find.text('Host a ride'),   findsOneWidget);
+    expect(find.text('RideSync'), findsOneWidget);
+    expect(find.text('Host a ride'), findsOneWidget);
     expect(find.text('Join with a code'), findsOneWidget);
     expect(find.text('Sign up or log in'), findsOneWidget);
   });

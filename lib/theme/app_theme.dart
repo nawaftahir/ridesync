@@ -6,7 +6,9 @@ import 'package:flutter/material.dart';
 class AppTheme {
   // Light colors
   static const _lightPrimary = Color(0xFF0175C2); // main blue (buttons, links)
-  static const _lightSecondary = Color(0xFF13B9FD); // bright sky blue (rider dots)
+  static const _lightSecondary = Color(
+    0xFF13B9FD,
+  ); // bright sky blue (rider dots)
   static const _lightText = Color(0xFF0B1F33);
   static const _lightMuted = Color(0xFF4A6178); // grey blue for small text
   static const _lightBorder = Color(0xFFD5E2EE);
@@ -107,7 +109,9 @@ class AppTheme {
       filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(
           minimumSize: const Size.fromHeight(54),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
           textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
         ),
       ),
@@ -116,7 +120,9 @@ class AppTheme {
           minimumSize: const Size.fromHeight(54),
           foregroundColor: colors.onSurface,
           side: BorderSide(color: colors.outlineVariant),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
           textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
         ),
       ),
