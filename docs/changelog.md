@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-11-02 Cleanup
+- Removed the icon exporter tool, it was only needed to make the logo.
+- README and CONTRIBUTING now show the Flutter version and `flutter pub get` after pulling.
+- Fixed folder names in CONTRIBUTING (`lib/data/`, `lib/repositories/`).
+
 ## 2026-10-13 — Alpha Build Preview
 - Added Host Ride screen with random 6-letter join code generator.
 - Added Join Ride screen with code lookup
