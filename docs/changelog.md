@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-11-03 Map colors
+- Map pins now use the theme colors (main color for active riders, warning color for signal lost) instead of fixed blue and red.
+- The map gets darker in dark mode so it matches the rest of the app.
+
 ## 2026-11-02 Cleanup
 - Removed the icon exporter tool, it was only needed to make the logo.
 - README and CONTRIBUTING now show the Flutter version and `flutter pub get` after pulling.
