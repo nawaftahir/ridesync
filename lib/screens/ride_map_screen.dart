@@ -21,13 +21,18 @@ class RideMapScreen extends StatelessWidget {
   final RiderRepository riderRepository;
 
   // Turns RiderPosition list → flutter_map Marker list.
-  // Blue pin = active, red pin = signal lost (ageSeconds > 60).
-  List<Marker> _buildMarkers(List<RiderPosition> positions) {
+  // Main theme color = active, warning color = signal lost (ageSeconds > 60).
+  List<Marker> _buildMarkers(
+    BuildContext context,
+    List<RiderPosition> positions,
+  ) {
+    final colors = Theme.of(context).colorScheme;
     final markers = <Marker>[];
 
     for (int i = 0; i < positions.length; i++) {
       final position = positions[i];
-      final color = position.isStale ? Colors.redAccent : Colors.blueAccent;
+      final color = position.isStale ? colors.tertiary : colors.primary;
+      final textColor = position.isStale ? colors.onTertiary : colors.onPrimary;
       markers.add(
         Marker(
           point: position.point,
@@ -40,8 +45,8 @@ class RideMapScreen extends StatelessWidget {
               backgroundColor: color,
               child: Text(
                 position.rider.initial,
-                style: const TextStyle(
-                  color: Colors.white,
+                style: TextStyle(
+                  color: textColor,
                   fontWeight: FontWeight.bold,
                 ),
               ),
@@ -58,6 +63,7 @@ class RideMapScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     final text = Theme.of(context).textTheme;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Scaffold(
       appBar: AppBar(
@@ -86,8 +92,12 @@ class RideMapScreen extends StatelessWidget {
               TileLayer(
                 urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                 userAgentPackageName: 'com.example.ridesync',
+                // In dark mode, darken the map tiles so they match the theme.
+                tileBuilder: isDark ? darkModeTileBuilder : null,
               ),
-              MarkerLayer(markers: _buildMarkers(riderRepository.positions)),
+              MarkerLayer(
+                markers: _buildMarkers(context, riderRepository.positions),
+              ),
             ],
           ),
 
