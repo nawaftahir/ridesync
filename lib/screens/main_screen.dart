@@ -38,6 +38,7 @@ class _MainScreenState extends State<MainScreen> {
         joinCode: sample.code,
         destination: sample.destination,
         isHost: true,
+        distanceKm: sample.distanceKm,
       );
     }
   }

@@ -50,6 +50,7 @@ class _JoinRideScreenState extends State<JoinRideScreen> {
         joinCode: ride.code,
         destination: ride.destination,
         isHost: false,
+        distanceKm: ride.distanceKm,
       ),
     );
   }
