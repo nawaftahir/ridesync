@@ -1,6 +1,8 @@
 # Changelog
 
 ## 2026-11-13 Bottom navigation & tab pages
+- Redesigned the map screen to match the design: floating destination card, `Recenter map` button with `MapController`, mock route polyline, and rider name markers.
+- Added the collapsible `"Group ride"` bottom sheet with `"Live sync"` pill, overlapping rider avatars, `PICKUP` / `DESTINATION` route card, and `End Ride` / `Leave` controls.
 - Added a 4-tab bottom navigation bar (`Map`, `Rides`, `Group`, `Profile`) inside `MainScreen`.
 - Added `RidesScreen` (host/join actions + mock past rides), work-in-progress `GroupScreen`, and `ProfileScreen` (rider summary + login link).
 - Passed active ride data between `HostRideScreen`/`JoinRideScreen` and `MainScreen` using `ActiveRide`, and added `End Ride` / `Leave` state handling on the map.
