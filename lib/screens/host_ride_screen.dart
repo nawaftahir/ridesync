@@ -1,7 +1,7 @@
 import 'dart:math';
 
 import 'package:flutter/material.dart';
-import 'package:ridesync/screens/ride_map_screen.dart';
+import 'package:ridesync/models/active_ride.dart';
 
 class HostRideScreen extends StatefulWidget {
   const HostRideScreen({super.key});
@@ -42,13 +42,12 @@ class _HostRideScreenState extends State<HostRideScreen> {
   }
 
   void _onStartRideTapped() {
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => RideMapScreen(
-          joinCode: _joinCode!,
-          destination: _destinationController.text.trim(),
-          isHost: true,
-        ),
+    // Return the created ride to MainScreen so it opens on the Map tab.
+    Navigator.of(context).pop(
+      ActiveRide(
+        joinCode: _joinCode!,
+        destination: _destinationController.text.trim(),
+        isHost: true,
       ),
     );
   }

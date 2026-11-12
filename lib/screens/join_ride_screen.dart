@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:ridesync/models/active_ride.dart';
 import 'package:ridesync/repositories/ride_repository.dart';
-import 'package:ridesync/screens/ride_map_screen.dart';
 
 class JoinRideScreen extends StatefulWidget {
   const JoinRideScreen({super.key});
@@ -44,13 +44,12 @@ class _JoinRideScreenState extends State<JoinRideScreen> {
     setState(() {
       _isLoading = false;
     });
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => RideMapScreen(
-          joinCode: ride.code,
-          destination: ride.destination,
-          isHost: false,
-        ),
+    // Return the joined ride to MainScreen so it opens on the Map tab.
+    Navigator.of(context).pop(
+      ActiveRide(
+        joinCode: ride.code,
+        destination: ride.destination,
+        isHost: false,
       ),
     );
   }

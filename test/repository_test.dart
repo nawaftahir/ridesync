@@ -21,4 +21,12 @@ void main() {
     expect(riderRepository.positions, hasLength(3));
     expect(riderRepository.positions.first.rider.name, 'Nawaf');
   });
+
+  test('exposes mock past rides for the Rides tab', () {
+    expect(rideRepository.pastRides, isNotEmpty);
+    expect(
+      rideRepository.pastRides.first.destination,
+      'Daman-e-Koh, Islamabad',
+    );
+  });
 }

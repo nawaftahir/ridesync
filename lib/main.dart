@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:ridesync/screens/home_screen.dart';
+import 'package:ridesync/screens/main_screen.dart';
 import 'package:ridesync/theme/app_theme.dart';
 
 void main() {
@@ -18,7 +18,7 @@ class RideSyncApp extends StatelessWidget {
       darkTheme: AppTheme.dark,
       // Follow the phone: light when the phone is light, dark when it is dark.
       themeMode: ThemeMode.system,
-      home: const HomeScreen(),
+      home: const MainScreen(),
     );
   }
 }

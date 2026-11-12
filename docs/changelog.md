@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-11-13 Bottom navigation & tab pages
+- Added a 4-tab bottom navigation bar (`Map`, `Rides`, `Group`, `Profile`) inside `MainScreen`.
+- Added `RidesScreen` (host/join actions + mock past rides), work-in-progress `GroupScreen`, and `ProfileScreen` (rider summary + login link).
+- Passed active ride data between `HostRideScreen`/`JoinRideScreen` and `MainScreen` using `ActiveRide`, and added `End Ride` / `Leave` state handling on the map.
+
 ## 2026-11-03 Map colors
 - Map pins now use the theme colors (main color for active riders, warning color for signal lost) instead of fixed blue and red.
 - The map gets darker in dark mode so it matches the rest of the app.

@@ -132,6 +132,26 @@ class AppTheme {
         ),
       ),
 
+      navigationBarTheme: NavigationBarThemeData(
+        backgroundColor: colors.surfaceContainerLow,
+        indicatorColor: colors.primaryContainer,
+        elevation: 0,
+        iconTheme: WidgetStateProperty.resolveWith((states) {
+          final isSelected = states.contains(WidgetState.selected);
+          return IconThemeData(
+            color: isSelected ? colors.primary : colors.onSurfaceVariant,
+          );
+        }),
+        labelTextStyle: WidgetStateProperty.resolveWith((states) {
+          final isSelected = states.contains(WidgetState.selected);
+          return TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w700,
+            color: isSelected ? colors.primary : colors.onSurfaceVariant,
+          );
+        }),
+      ),
+
       dividerTheme: DividerThemeData(color: colors.outlineVariant),
     );
   }
