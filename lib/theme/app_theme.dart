@@ -152,6 +152,19 @@ class AppTheme {
         }),
       ),
 
+      segmentedButtonTheme: SegmentedButtonThemeData(
+        style: SegmentedButton.styleFrom(
+          selectedBackgroundColor: colors.primaryContainer,
+          selectedForegroundColor: colors.onPrimaryContainer,
+          foregroundColor: colors.onSurfaceVariant,
+          side: BorderSide(color: colors.outlineVariant),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+          textStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+        ),
+      ),
+
       dividerTheme: DividerThemeData(color: colors.outlineVariant),
     );
   }

@@ -81,4 +81,52 @@ void main() {
     expect(find.text('Lake View Park, Islamabad'), findsNWidgets(2));
     expect(find.text('Leave'), findsOneWidget);
   });
+
+  testWidgets('Profile appearance switches between Auto, Light, and Dark', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(360, 780);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+
+    await tester.pumpWidget(const RideSyncApp());
+    await tester.pump();
+
+    await tester.tap(find.text('Profile'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Auto'), findsOneWidget);
+    expect(find.text('Light'), findsOneWidget);
+    expect(find.text('Dark'), findsOneWidget);
+    expect(find.text('Auto · Follows phone Light / Dark mode'), findsOneWidget);
+
+    MaterialApp app() => tester.widget<MaterialApp>(find.byType(MaterialApp));
+    expect(app().themeMode, ThemeMode.system);
+
+    await tester.tap(find.text('Dark'));
+    await tester.pumpAndSettle();
+    expect(app().themeMode, ThemeMode.dark);
+    expect(find.text('Dark · Always uses dark theme'), findsOneWidget);
+    expect(
+      Theme.of(tester.element(find.text('Appearance'))).brightness,
+      Brightness.dark,
+    );
+
+    await tester.tap(find.text('Light'));
+    await tester.pumpAndSettle();
+    expect(app().themeMode, ThemeMode.light);
+    expect(find.text('Light · Always uses light theme'), findsOneWidget);
+    expect(
+      Theme.of(tester.element(find.text('Appearance'))).brightness,
+      Brightness.light,
+    );
+
+    await tester.tap(find.text('Auto'));
+    await tester.pumpAndSettle();
+    expect(app().themeMode, ThemeMode.system);
+    expect(find.text('Auto · Follows phone Light / Dark mode'), findsOneWidget);
+  });
 }

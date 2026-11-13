@@ -2,14 +2,30 @@ import 'package:flutter/material.dart';
 import 'package:ridesync/repositories/ride_repository.dart';
 import 'package:ridesync/screens/login_screen.dart';
 
-// Rider profile page with mock rider summary and link to LoginScreen.
+// Rider profile page with mock rider summary, theme switcher, and login link.
 class ProfileScreen extends StatelessWidget {
   const ProfileScreen({
     super.key,
     this.rideRepository = const RideRepository(),
+    this.themeMode = ThemeMode.system,
+    this.onThemeModeChanged,
   });
 
   final RideRepository rideRepository;
+  final ThemeMode themeMode;
+  final ValueChanged<ThemeMode>? onThemeModeChanged;
+
+  IconData get _themeIcon => switch (themeMode) {
+    ThemeMode.system => Icons.brightness_auto_outlined,
+    ThemeMode.light => Icons.light_mode_outlined,
+    ThemeMode.dark => Icons.dark_mode_outlined,
+  };
+
+  String get _themeDescription => switch (themeMode) {
+    ThemeMode.system => 'Auto · Follows phone Light / Dark mode',
+    ThemeMode.light => 'Light · Always uses light theme',
+    ThemeMode.dark => 'Dark · Always uses dark theme',
+  };
 
   @override
   Widget build(BuildContext context) {
@@ -101,9 +117,39 @@ class ProfileScreen extends StatelessWidget {
             child: Column(
               children: [
                 ListTile(
-                  leading: const Icon(Icons.brightness_6_outlined),
+                  leading: Icon(_themeIcon),
                   title: const Text('Appearance'),
-                  subtitle: const Text('Follows phone Light / Dark mode'),
+                  subtitle: Text(_themeDescription),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: SegmentedButton<ThemeMode>(
+                      showSelectedIcon: false,
+                      segments: const [
+                        ButtonSegment<ThemeMode>(
+                          value: ThemeMode.system,
+                          icon: Icon(Icons.brightness_auto_outlined, size: 18),
+                          label: Text('Auto'),
+                        ),
+                        ButtonSegment<ThemeMode>(
+                          value: ThemeMode.light,
+                          icon: Icon(Icons.light_mode_outlined, size: 18),
+                          label: Text('Light'),
+                        ),
+                        ButtonSegment<ThemeMode>(
+                          value: ThemeMode.dark,
+                          icon: Icon(Icons.dark_mode_outlined, size: 18),
+                          label: Text('Dark'),
+                        ),
+                      ],
+                      selected: {themeMode},
+                      onSelectionChanged: onThemeModeChanged == null
+                          ? null
+                          : (selection) => onThemeModeChanged!(selection.first),
+                    ),
+                  ),
                 ),
                 const Divider(height: 1),
                 const ListTile(

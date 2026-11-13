@@ -1,5 +1,8 @@
 # Changelog
 
+## 2026-11-13 Theme switcher (Auto / Light / Dark)
+- Added an in-app `Auto` / `Light` / `Dark` theme selector on `ProfileScreen` wired through `MainScreen` and `RideSyncApp` so riders can override system appearance directly in the app.
+
 ## 2026-11-13 Real GPS tracking
 - Added `LocationService` wrapping `geolocator` to check GPS/permissions, handle denied states, trigger Android's in-app location dialog without leaving the app, and stream live coordinates and speed (`km/h`).
 - Added live `'You'` marker, speed pill, permission banner with retry/settings actions, and follow-me `Recenter` behavior to `RideMapScreen`.

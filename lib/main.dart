@@ -6,8 +6,24 @@ void main() {
   runApp(const RideSyncApp());
 }
 
-class RideSyncApp extends StatelessWidget {
-  const RideSyncApp({super.key});
+class RideSyncApp extends StatefulWidget {
+  const RideSyncApp({super.key, this.initialThemeMode = ThemeMode.system});
+
+  final ThemeMode initialThemeMode;
+
+  @override
+  State<RideSyncApp> createState() => _RideSyncAppState();
+}
+
+class _RideSyncAppState extends State<RideSyncApp> {
+  late ThemeMode _themeMode = widget.initialThemeMode;
+
+  void _setThemeMode(ThemeMode mode) {
+    if (mode == _themeMode) return;
+    setState(() {
+      _themeMode = mode;
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -16,9 +32,11 @@ class RideSyncApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light,
       darkTheme: AppTheme.dark,
-      // Follow the phone: light when the phone is light, dark when it is dark.
-      themeMode: ThemeMode.system,
-      home: const MainScreen(),
+      themeMode: _themeMode,
+      home: MainScreen(
+        themeMode: _themeMode,
+        onThemeModeChanged: _setThemeMode,
+      ),
     );
   }
 }

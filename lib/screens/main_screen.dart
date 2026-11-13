@@ -17,11 +17,15 @@ class MainScreen extends StatefulWidget {
     this.rideRepository = const RideRepository(),
     this.riderRepository = const RiderRepository(),
     this.locationService = const LocationService(),
+    this.themeMode = ThemeMode.system,
+    this.onThemeModeChanged,
   });
 
   final RideRepository rideRepository;
   final RiderRepository riderRepository;
   final LocationService locationService;
+  final ThemeMode themeMode;
+  final ValueChanged<ThemeMode>? onThemeModeChanged;
 
   @override
   State<MainScreen> createState() => _MainScreenState();
@@ -91,7 +95,11 @@ class _MainScreenState extends State<MainScreen> {
             activeRide: _activeRide,
             riders: widget.riderRepository.positions,
           ),
-          ProfileScreen(rideRepository: widget.rideRepository),
+          ProfileScreen(
+            rideRepository: widget.rideRepository,
+            themeMode: widget.themeMode,
+            onThemeModeChanged: widget.onThemeModeChanged,
+          ),
         ],
       ),
       bottomNavigationBar: DecoratedBox(

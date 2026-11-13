@@ -793,16 +793,20 @@ class _MapBottomSheet extends StatelessWidget {
                       ),
                     ),
                     Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Text(
-                          ride == null ? 'Ready to ride' : 'Group ride',
-                          style: const TextStyle(
-                            fontSize: 22,
-                            fontWeight: FontWeight.w800,
-                            letterSpacing: -0.4,
+                        Expanded(
+                          child: Text(
+                            ride == null ? 'Ready to ride' : 'Group ride',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontSize: 22,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: -0.4,
+                            ),
                           ),
                         ),
+                        const SizedBox(width: 8),
                         _StatusPill(isLive: ride != null),
                       ],
                     ),
