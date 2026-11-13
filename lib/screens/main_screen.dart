@@ -8,6 +8,7 @@ import 'package:ridesync/screens/join_ride_screen.dart';
 import 'package:ridesync/screens/profile_screen.dart';
 import 'package:ridesync/screens/ride_map_screen.dart';
 import 'package:ridesync/screens/rides_screen.dart';
+import 'package:ridesync/services/location_service.dart';
 
 // Main app shell holding the 4-tab bottom bar and the active ride state.
 class MainScreen extends StatefulWidget {
@@ -15,10 +16,12 @@ class MainScreen extends StatefulWidget {
     super.key,
     this.rideRepository = const RideRepository(),
     this.riderRepository = const RiderRepository(),
+    this.locationService = const LocationService(),
   });
 
   final RideRepository rideRepository;
   final RiderRepository riderRepository;
+  final LocationService locationService;
 
   @override
   State<MainScreen> createState() => _MainScreenState();
@@ -75,6 +78,7 @@ class _MainScreenState extends State<MainScreen> {
             onHostRide: () => _openRideFlow(const HostRideScreen()),
             onJoinRide: () => _openRideFlow(const JoinRideScreen()),
             riderRepository: widget.riderRepository,
+            locationService: widget.locationService,
           ),
           RidesScreen(
             activeRide: _activeRide,

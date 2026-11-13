@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
@@ -6,6 +8,7 @@ import 'package:ridesync/models/active_ride.dart';
 import 'package:ridesync/models/rider_position.dart';
 import 'package:ridesync/repositories/rider_repository.dart';
 import 'package:ridesync/screens/convoy_screen.dart';
+import 'package:ridesync/services/location_service.dart';
 
 class RideMapScreen extends StatefulWidget {
   const RideMapScreen({
@@ -15,6 +18,7 @@ class RideMapScreen extends StatefulWidget {
     required this.onHostRide,
     required this.onJoinRide,
     this.riderRepository = const RiderRepository(),
+    this.locationService = const LocationService(),
   });
 
   final ActiveRide? activeRide;
@@ -22,123 +26,311 @@ class RideMapScreen extends StatefulWidget {
   final VoidCallback onHostRide;
   final VoidCallback onJoinRide;
   final RiderRepository riderRepository;
+  final LocationService locationService;
 
   @override
   State<RideMapScreen> createState() => _RideMapScreenState();
 }
 
-class _RideMapScreenState extends State<RideMapScreen> {
+class _RideMapScreenState extends State<RideMapScreen>
+    with WidgetsBindingObserver {
   final MapController _mapController = MapController();
+
+  StreamSubscription<GpsFix>? _positionSub;
+  StreamSubscription<bool>? _serviceStatusSub;
+  LocationStatus _locationStatus = LocationStatus.checking;
+  GpsFix? _myFix;
+  bool _followMe = true;
+  bool _isMapReady = false;
   bool _isSheetCollapsed = false;
+  bool _bannerDismissed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _listenServiceStatus();
+    _startLocationTracking();
+  }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _positionSub?.cancel();
+    _serviceStatusSub?.cancel();
     _mapController.dispose();
     super.dispose();
   }
 
+  void _listenServiceStatus() {
+    _serviceStatusSub = widget.locationService.serviceEnabledStream().listen((
+      enabled,
+    ) {
+      if (!mounted) return;
+      if (enabled && _locationStatus == LocationStatus.serviceDisabled) {
+        _startLocationTracking();
+      } else if (!enabled && _locationStatus == LocationStatus.ready) {
+        _positionSub?.cancel();
+        _positionSub = null;
+        setState(() {
+          _locationStatus = LocationStatus.serviceDisabled;
+          _bannerDismissed = false;
+        });
+      }
+    }, onError: (_) {});
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Re-check automatically when the user returns from phone Settings.
+    if (state == AppLifecycleState.resumed &&
+        (_locationStatus == LocationStatus.deniedForever ||
+            _locationStatus == LocationStatus.serviceDisabled)) {
+      _startLocationTracking();
+    }
+  }
+
+  Future<void> _startLocationTracking({
+    bool fallbackToSettingsOnImmediateError = false,
+  }) async {
+    final status = await widget.locationService.ensurePermission();
+    if (!mounted) return;
+    setState(() {
+      _locationStatus = status;
+      _bannerDismissed = false;
+    });
+    if (status != LocationStatus.ready) return;
+
+    if (_positionSub != null) {
+      await _positionSub!.cancel();
+      _positionSub = null;
+    }
+
+    final attemptStartedAt = DateTime.now();
+    _positionSub = widget.locationService.fixStream().listen(
+      _onNewFix,
+      cancelOnError: true,
+      onError: (Object error) {
+        _positionSub = null;
+        if (!mounted) return;
+        if (error is LocationServiceDisabledException) {
+          setState(() {
+            _locationStatus = LocationStatus.serviceDisabled;
+            _bannerDismissed = false;
+          });
+          final rejectedImmediately =
+              DateTime.now().difference(attemptStartedAt) <
+              const Duration(milliseconds: 350);
+          if (fallbackToSettingsOnImmediateError && rejectedImmediately) {
+            widget.locationService.openLocationSettings();
+          }
+        }
+      },
+    );
+
+    final lastFix = await widget.locationService.getLastKnownFix();
+    if (mounted &&
+        lastFix != null &&
+        _myFix == null &&
+        _locationStatus == LocationStatus.ready) {
+      _onNewFix(lastFix);
+    }
+  }
+
+  void _onNewFix(GpsFix fix) {
+    if (!mounted) return;
+    setState(() {
+      _locationStatus = LocationStatus.ready;
+      _myFix = fix;
+    });
+    if (_followMe && _isMapReady) {
+      final currentZoom = _mapController.camera.zoom;
+      final targetZoom = currentZoom < 15 ? 16.0 : currentZoom;
+      _mapController.move(fix.point, targetZoom);
+    }
+  }
+
   void _recenterMap() {
-    _mapController.move(const LatLng(kMapCenterLat, kMapCenterLng), 14);
+    setState(() {
+      _followMe = true;
+    });
+    if (!_isMapReady) return;
+    final target = _myFix?.point ?? const LatLng(kMapCenterLat, kMapCenterLng);
+    final zoom = _myFix != null ? 16.0 : 14.0;
+    _mapController.move(target, zoom);
+  }
+
+  Future<void> _handlePermissionAction() async {
+    switch (_locationStatus) {
+      case LocationStatus.denied:
+        await _startLocationTracking();
+      case LocationStatus.serviceDisabled:
+        // Re-subscribing triggers Android's in-app "Turn on location" dialog
+        // without leaving the app (falls back to Settings only if unsupported).
+        await _startLocationTracking(fallbackToSettingsOnImmediateError: true);
+      case LocationStatus.deniedForever:
+        await widget.locationService.openAppSettings();
+      case LocationStatus.checking:
+      case LocationStatus.ready:
+      case LocationStatus.unavailable:
+        break;
+    }
+  }
+
+  // Updates the first rider with live GPS data when a real fix is available.
+  List<RiderPosition> _effectivePositions() {
+    final base = widget.riderRepository.positions;
+    final fix = _myFix;
+    if (fix == null || base.isEmpty) return base;
+    final me = base.first;
+    return [
+      RiderPosition(
+        rider: me.rider,
+        latitude: fix.point.latitude,
+        longitude: fix.point.longitude,
+        speedKmh: fix.speedKmh,
+        headingDegrees: me.headingDegrees,
+        batteryPercent: me.batteryPercent,
+        ageSeconds: 0,
+      ),
+      ...base.skip(1),
+    ];
   }
 
   void _openConvoy() {
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => ConvoyScreen(riders: widget.riderRepository.positions),
+        builder: (_) => ConvoyScreen(riders: _effectivePositions()),
       ),
     );
   }
 
-  // Turns RiderPosition list + route endpoints into flutter_map Markers.
+  Marker _buildRiderMarker(
+    BuildContext context, {
+    required LatLng point,
+    required String label,
+    required String tooltip,
+    required Color dotColor,
+    required Color pillColor,
+    required Color labelColor,
+  }) {
+    final colors = Theme.of(context).colorScheme;
+    return Marker(
+      point: point,
+      width: 108,
+      height: 58,
+      child: Tooltip(
+        message: tooltip,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              decoration: BoxDecoration(
+                color: pillColor,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: colors.outlineVariant),
+              ),
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  color: labelColor,
+                ),
+              ),
+            ),
+            const SizedBox(height: 2),
+            Container(
+              width: 24,
+              height: 24,
+              decoration: BoxDecoration(
+                color: dotColor.withValues(alpha: 0.25),
+                shape: BoxShape.circle,
+              ),
+              alignment: Alignment.center,
+              child: Container(
+                width: 14,
+                height: 14,
+                decoration: BoxDecoration(
+                  color: dotColor,
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: colors.surfaceContainerLow,
+                    width: 2.5,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   List<Marker> _buildMarkers(
     BuildContext context,
     List<RiderPosition> positions,
+    bool hasActiveRide,
   ) {
     final colors = Theme.of(context).colorScheme;
-    final markers = <Marker>[
-      // Route pickup dot and destination pin.
-      Marker(
-        point: kMockRoutePoints.first,
-        width: 22,
-        height: 22,
-        child: Container(
-          decoration: BoxDecoration(
-            color: colors.surfaceContainerLow,
-            shape: BoxShape.circle,
-            border: Border.all(color: colors.primary, width: 4),
-          ),
-        ),
-      ),
-      Marker(
-        point: kMockRoutePoints.last,
-        width: 36,
-        height: 36,
-        alignment: Alignment.topCenter,
-        child: Icon(Icons.location_on, color: colors.primary, size: 36),
-      ),
-    ];
+    final markers = <Marker>[];
 
-    for (final position in positions) {
-      final dotColor = position.isStale ? colors.tertiary : colors.secondary;
-      markers.add(
+    if (hasActiveRide) {
+      markers.addAll([
         Marker(
-          point: position.point,
-          width: 108,
-          height: 58,
-          child: Tooltip(
-            message:
-                '${position.rider.name} · ${position.speedKmh.round()} km/h',
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 2,
-                  ),
-                  decoration: BoxDecoration(
-                    color: colors.surfaceContainerLow,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: colors.outlineVariant),
-                  ),
-                  child: Text(
-                    position.rider.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700,
-                      color: position.isStale
-                          ? colors.tertiary
-                          : colors.onSurface,
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Container(
-                  width: 24,
-                  height: 24,
-                  decoration: BoxDecoration(
-                    color: dotColor.withValues(alpha: 0.25),
-                    shape: BoxShape.circle,
-                  ),
-                  alignment: Alignment.center,
-                  child: Container(
-                    width: 14,
-                    height: 14,
-                    decoration: BoxDecoration(
-                      color: dotColor,
-                      shape: BoxShape.circle,
-                      border: Border.all(
-                        color: colors.surfaceContainerLow,
-                        width: 2.5,
-                      ),
-                    ),
-                  ),
-                ),
-              ],
+          point: kMockRoutePoints.first,
+          width: 22,
+          height: 22,
+          child: Container(
+            decoration: BoxDecoration(
+              color: colors.surfaceContainerLow,
+              shape: BoxShape.circle,
+              border: Border.all(color: colors.primary, width: 4),
             ),
           ),
+        ),
+        Marker(
+          point: kMockRoutePoints.last,
+          width: 36,
+          height: 36,
+          alignment: Alignment.topCenter,
+          child: Icon(Icons.location_on, color: colors.primary, size: 36),
+        ),
+      ]);
+
+      // Skip the first mock rider if live GPS is active (replaced by "You").
+      final peerRiders = _myFix == null ? positions : positions.skip(1);
+      for (final position in peerRiders) {
+        final dotColor = position.isStale ? colors.tertiary : colors.secondary;
+        markers.add(
+          _buildRiderMarker(
+            context,
+            point: position.point,
+            label: position.rider.name,
+            tooltip:
+                '${position.rider.name} · ${position.speedKmh.round()} km/h',
+            dotColor: dotColor,
+            pillColor: colors.surfaceContainerLow,
+            labelColor: position.isStale ? colors.tertiary : colors.onSurface,
+          ),
+        );
+      }
+    }
+
+    final fix = _myFix;
+    if (fix != null) {
+      markers.add(
+        _buildRiderMarker(
+          context,
+          point: fix.point,
+          label: 'You',
+          tooltip: 'You · ${fix.speedKmh.round()} km/h',
+          dotColor: colors.primary,
+          pillColor: colors.primary,
+          labelColor: colors.onPrimary,
         ),
       );
     }
@@ -151,15 +343,34 @@ class _RideMapScreenState extends State<RideMapScreen> {
     final colors = Theme.of(context).colorScheme;
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final ride = widget.activeRide;
-    final positions = widget.riderRepository.positions;
+    final positions = _effectivePositions();
+    final showPermissionBanner =
+        !_bannerDismissed &&
+        (_locationStatus == LocationStatus.denied ||
+            _locationStatus == LocationStatus.deniedForever ||
+            _locationStatus == LocationStatus.serviceDisabled);
 
     return Stack(
       children: [
         FlutterMap(
           mapController: _mapController,
-          options: const MapOptions(
-            initialCenter: LatLng(kMapCenterLat, kMapCenterLng),
+          options: MapOptions(
+            initialCenter: const LatLng(kMapCenterLat, kMapCenterLng),
             initialZoom: 14, // 1 = world, 14 = street level
+            onMapReady: () {
+              _isMapReady = true;
+              final myPoint = _myFix?.point;
+              if (_followMe && myPoint != null) {
+                _mapController.move(myPoint, 16);
+              }
+            },
+            onPositionChanged: (_, hasGesture) {
+              if (hasGesture && _followMe) {
+                setState(() {
+                  _followMe = false;
+                });
+              }
+            },
           ),
           children: [
             TileLayer(
@@ -182,35 +393,66 @@ class _RideMapScreenState extends State<RideMapScreen> {
                   ),
                 ],
               ),
-            if (ride != null)
-              MarkerLayer(markers: _buildMarkers(context, positions)),
+            MarkerLayer(
+              markers: _buildMarkers(context, positions, ride != null),
+            ),
           ],
         ),
 
-        // Top floating destination card and right-side map controls.
+        // Top floating destination card, permission banner, speed pill, and buttons.
         SafeArea(
           bottom: false,
           child: Padding(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
             child: Column(
               mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.end,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 _MapTopCard(activeRide: ride, onTapIdle: widget.onHostRide),
-                const SizedBox(height: 10),
-                _MapActionButton(
-                  icon: Icons.my_location,
-                  tooltip: 'Recenter map',
-                  onPressed: _recenterMap,
-                ),
-                if (ride != null) ...[
+                if (showPermissionBanner) ...[
                   const SizedBox(height: 8),
-                  _MapActionButton(
-                    icon: Icons.people_outline,
-                    tooltip: 'Convoy riders',
-                    onPressed: _openConvoy,
+                  _LocationBanner(
+                    status: _locationStatus,
+                    onAction: _handlePermissionAction,
+                    onDismiss: () {
+                      setState(() {
+                        _bannerDismissed = true;
+                      });
+                    },
                   ),
                 ],
+                const SizedBox(height: 10),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    _SpeedPill(speedKmh: _myFix?.speedKmh),
+                    Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _MapActionButton(
+                          icon: _followMe
+                              ? Icons.my_location
+                              : Icons.location_searching,
+                          iconColor: _followMe
+                              ? colors.primary
+                              : colors.onSurfaceVariant,
+                          tooltip: 'Recenter map',
+                          onPressed: _recenterMap,
+                        ),
+                        if (ride != null) ...[
+                          const SizedBox(height: 8),
+                          _MapActionButton(
+                            icon: Icons.people_outline,
+                            iconColor: colors.primary,
+                            tooltip: 'Convoy riders',
+                            onPressed: _openConvoy,
+                          ),
+                        ],
+                      ],
+                    ),
+                  ],
+                ),
               ],
             ),
           ),
@@ -237,6 +479,120 @@ class _RideMapScreenState extends State<RideMapScreen> {
           ),
         ),
       ],
+    );
+  }
+}
+
+// Shows GPS speed in km/h when a fix is available.
+class _SpeedPill extends StatelessWidget {
+  const _SpeedPill({required this.speedKmh});
+
+  final double? speedKmh;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final speedText = speedKmh == null ? '--' : '${speedKmh!.round()}';
+
+    return Material(
+      color: colors.surfaceContainerLow,
+      elevation: 3,
+      shadowColor: Colors.black.withValues(alpha: 0.18),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(14),
+        side: BorderSide(color: colors.outlineVariant),
+      ),
+      child: SizedBox(
+        height: 44,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.speed, size: 18, color: colors.primary),
+              const SizedBox(width: 6),
+              Text(
+                speedText,
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(width: 4),
+              Text(
+                'km/h',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: colors.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// Shown when location permission is denied or GPS is turned off.
+class _LocationBanner extends StatelessWidget {
+  const _LocationBanner({
+    required this.status,
+    required this.onAction,
+    required this.onDismiss,
+  });
+
+  final LocationStatus status;
+  final VoidCallback onAction;
+  final VoidCallback onDismiss;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final (message, actionLabel) = switch (status) {
+      LocationStatus.denied => ('Location permission denied', 'Allow'),
+      LocationStatus.deniedForever => (
+        'Location blocked in settings',
+        'Settings',
+      ),
+      LocationStatus.serviceDisabled => ('GPS is turned off', 'Turn on'),
+      _ => ('', ''),
+    };
+
+    return Material(
+      color: colors.surfaceContainerLow,
+      elevation: 3,
+      shadowColor: Colors.black.withValues(alpha: 0.18),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(14),
+        side: BorderSide(color: colors.tertiary),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 6, 4, 6),
+        child: Row(
+          children: [
+            Icon(Icons.location_off, size: 18, color: colors.tertiary),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                message,
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+            TextButton(onPressed: onAction, child: Text(actionLabel)),
+            IconButton(
+              onPressed: onDismiss,
+              icon: const Icon(Icons.close, size: 18),
+              visualDensity: VisualDensity.compact,
+              tooltip: 'Dismiss',
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -327,11 +683,13 @@ class _MapTopCard extends StatelessWidget {
 class _MapActionButton extends StatelessWidget {
   const _MapActionButton({
     required this.icon,
+    required this.iconColor,
     required this.tooltip,
     required this.onPressed,
   });
 
   final IconData icon;
+  final Color iconColor;
   final String tooltip;
   final VoidCallback onPressed;
 
@@ -355,7 +713,7 @@ class _MapActionButton extends StatelessWidget {
           child: SizedBox(
             width: 44,
             height: 44,
-            child: Icon(icon, size: 20, color: colors.primary),
+            child: Icon(icon, size: 20, color: iconColor),
           ),
         ),
       ),
@@ -541,7 +899,7 @@ class _MapBottomSheet extends StatelessWidget {
   }
 }
 
-// "Live sync" (or "Not active") pill shown at the top-right of the bottom sheet.
+// "Live sync" (or "Idle") pill shown at the top-right of the bottom sheet.
 class _StatusPill extends StatelessWidget {
   const _StatusPill({required this.isLive});
 
