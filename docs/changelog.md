@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-11-13 Real GPS tracking
+- Added `LocationService` wrapping `geolocator` to check GPS/permissions, handle denied states, trigger Android's in-app location dialog without leaving the app, and stream live coordinates and speed (`km/h`).
+- Added live `'You'` marker, speed pill, permission banner with retry/settings actions, and follow-me `Recenter` behavior to `RideMapScreen`.
+- Configured Android location/internet permissions in `AndroidManifest.xml` and iOS location usage text in `Info.plist`.
+
 ## 2026-11-13 Bottom navigation & tab pages
 - Redesigned the map screen to match the design: floating destination card, `Recenter map` button with `MapController`, mock route polyline, and rider name markers.
 - Added the collapsible `"Group ride"` bottom sheet with `"Live sync"` pill, overlapping rider avatars, `PICKUP` / `DESTINATION` route card, and `End Ride` / `Leave` controls.
