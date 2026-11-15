@@ -1,9 +1,8 @@
 # Changelog
 
-## 2026-11-15 (experiment)
-- Tried OpenFreeMap vector maps (`positron` for light, `dark` for dark mode) in place of the OpenStreetMap picture tiles, with OpenStreetMap as the fallback when offline.
-- Added the `vector_map_tiles` package and set `latlong2` back to `^0.9.1`, because that package does not support `latlong2` 0.10 yet.
-- Added the map credits (OpenFreeMap, OpenMapTiles, OpenStreetMap contributors) on the map.
+## 2026-11-15
+- Switched ride map tiles to OpenFreeMap vector maps (`positron` light, `dark` dark) with OpenStreetMap fallback, separate light/dark theme cache keys, pooled HTTP tile requests, opposite-theme prefetching, zoom/navigation fixes (`3..18`, rotation lock, zoom buttons, non-overlapping credits), and a vertically swipeable `"Group ride"` bottom sheet.
+- Added `vector_map_tiles`, pinned `latlong2` to `^0.9.1`, and tuned Android Gradle wrapper/daemon/memory settings.
 
 ## 2026-11-13
 - Added a 4-tab bottom navigation bar (`Map`, `Rides`, `Group`, `Profile`) inside `MainScreen`, with `RidesScreen` (host/join actions + mock past rides), work-in-progress `GroupScreen`, and `ProfileScreen` (rider summary + login link).
