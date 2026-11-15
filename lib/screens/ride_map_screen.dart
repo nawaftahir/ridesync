@@ -9,6 +9,7 @@ import 'package:ridesync/models/rider_position.dart';
 import 'package:ridesync/repositories/rider_repository.dart';
 import 'package:ridesync/screens/convoy_screen.dart';
 import 'package:ridesync/services/location_service.dart';
+import 'package:ridesync/widgets/open_free_map_layer.dart';
 
 class RideMapScreen extends StatefulWidget {
   const RideMapScreen({
@@ -373,10 +374,16 @@ class _RideMapScreenState extends State<RideMapScreen>
             },
           ),
           children: [
-            TileLayer(
-              urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-              userAgentPackageName: 'com.example.ridesync',
-              tileBuilder: isDark ? darkModeTileBuilder : null,
+            // OpenFreeMap vector map (falls back to OpenStreetMap if offline).
+            OpenFreeMapLayer(isDark: isDark),
+            // The map data licenses require these credits to be visible.
+            const RichAttributionWidget(
+              alignment: AttributionAlignment.bottomRight,
+              attributions: [
+                TextSourceAttribution('OpenFreeMap'),
+                TextSourceAttribution('OpenMapTiles'),
+                TextSourceAttribution('OpenStreetMap contributors'),
+              ],
             ),
             if (ride != null)
               PolylineLayer(
