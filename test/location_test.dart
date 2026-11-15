@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
@@ -201,5 +202,48 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(find.text('25'), findsOneWidget);
+  });
+
+  testWidgets('Follow-me preserves user zoom across later GPS updates', (
+    tester,
+  ) async {
+    final fixController = StreamController<GpsFix>.broadcast();
+    addTearDown(fixController.close);
+
+    final fakeLocation = _FakeLocationService(
+      status: LocationStatus.ready,
+      streamFactory: () => fixController.stream,
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: MainScreen(locationService: fakeLocation),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final controller = tester
+        .widget<FlutterMap>(find.byType(FlutterMap))
+        .mapController!;
+
+    // First fix auto-zooms to street level (16).
+    const firstPoint = LatLng(33.7250, 73.0480);
+    fixController.add(const GpsFix(point: firstPoint, speedKmh: 20.0));
+    await tester.pumpAndSettle();
+    expect(controller.camera.zoom, equals(16));
+    expect(controller.camera.center.latitude, closeTo(33.7250, 1e-4));
+
+    // User zooms out twice to zoom 14; subsequent fixes must keep zoom 14.
+    await tester.tap(find.byTooltip('Zoom out'));
+    await tester.tap(find.byTooltip('Zoom out'));
+    await tester.pumpAndSettle();
+    expect(controller.camera.zoom, equals(14));
+
+    const secondPoint = LatLng(33.7290, 73.0510);
+    fixController.add(const GpsFix(point: secondPoint, speedKmh: 30.0));
+    await tester.pumpAndSettle();
+    expect(controller.camera.zoom, equals(14));
+    expect(controller.camera.center.latitude, closeTo(33.7290, 1e-4));
   });
 }

@@ -43,6 +43,7 @@ class _RideMapScreenState extends State<RideMapScreen>
   GpsFix? _myFix;
   bool _followMe = true;
   bool _isMapReady = false;
+  bool _hasInitialGpsCenter = false;
   bool _isSheetCollapsed = false;
   bool _bannerDismissed = false;
 
@@ -144,9 +145,19 @@ class _RideMapScreenState extends State<RideMapScreen>
       _locationStatus = LocationStatus.ready;
       _myFix = fix;
     });
-    if (_followMe && _isMapReady) {
-      final currentZoom = _mapController.camera.zoom;
-      final targetZoom = currentZoom < 15 ? 16.0 : currentZoom;
+    if (!_followMe || !_isMapReady) return;
+
+    final camera = _mapController.camera;
+    // Zoom in to street level once on the first GPS lock; after that, respect
+    // whatever zoom level the rider chose.
+    final targetZoom = !_hasInitialGpsCenter && camera.zoom < 16.0
+        ? 16.0
+        : camera.zoom;
+    final movedEnough =
+        (camera.center.latitude - fix.point.latitude).abs() >= 1e-5 ||
+        (camera.center.longitude - fix.point.longitude).abs() >= 1e-5;
+    if (!_hasInitialGpsCenter || movedEnough) {
+      _hasInitialGpsCenter = true;
       _mapController.move(fix.point, targetZoom);
     }
   }
@@ -156,9 +167,20 @@ class _RideMapScreenState extends State<RideMapScreen>
       _followMe = true;
     });
     if (!_isMapReady) return;
-    final target = _myFix?.point ?? const LatLng(kMapCenterLat, kMapCenterLng);
-    final zoom = _myFix != null ? 16.0 : 14.0;
-    _mapController.move(target, zoom);
+    if (_myFix != null) {
+      _hasInitialGpsCenter = true;
+      final currentZoom = _mapController.camera.zoom;
+      final targetZoom = currentZoom < 15 ? 16.0 : currentZoom.clamp(3.0, 18.0);
+      _mapController.move(_myFix!.point, targetZoom);
+      return;
+    }
+    _mapController.move(const LatLng(kMapCenterLat, kMapCenterLng), 14.0);
+  }
+
+  void _zoomBy(double delta) {
+    if (!_isMapReady) return;
+    final nextZoom = (_mapController.camera.zoom + delta).clamp(3.0, 18.0);
+    _mapController.move(_mapController.camera.center, nextZoom);
   }
 
   Future<void> _handlePermissionAction() async {
@@ -358,10 +380,22 @@ class _RideMapScreenState extends State<RideMapScreen>
           options: MapOptions(
             initialCenter: const LatLng(kMapCenterLat, kMapCenterLng),
             initialZoom: 14, // 1 = world, 14 = street level
+            minZoom: 3,
+            maxZoom: 18,
+            backgroundColor: isDark
+                ? const Color(0xFF0C0C0C)
+                : const Color(0xFFF2F3F0),
+            cameraConstraint: const CameraConstraint.containLatitude(),
+            // Keep north-up so pre-rendered street names don't spin upside
+            // down from an accidental two-finger twist.
+            interactionOptions: const InteractionOptions(
+              flags: InteractiveFlag.all & ~InteractiveFlag.rotate,
+            ),
             onMapReady: () {
               _isMapReady = true;
               final myPoint = _myFix?.point;
               if (_followMe && myPoint != null) {
+                _hasInitialGpsCenter = true;
                 _mapController.move(myPoint, 16);
               }
             },
@@ -376,15 +410,6 @@ class _RideMapScreenState extends State<RideMapScreen>
           children: [
             // OpenFreeMap vector map (falls back to OpenStreetMap if offline).
             OpenFreeMapLayer(isDark: isDark),
-            // The map data licenses require these credits to be visible.
-            const RichAttributionWidget(
-              alignment: AttributionAlignment.bottomRight,
-              attributions: [
-                TextSourceAttribution('OpenFreeMap'),
-                TextSourceAttribution('OpenMapTiles'),
-                TextSourceAttribution('OpenStreetMap contributors'),
-              ],
-            ),
             if (ride != null)
               PolylineLayer(
                 polylines: [
@@ -447,6 +472,20 @@ class _RideMapScreenState extends State<RideMapScreen>
                           tooltip: 'Recenter map',
                           onPressed: _recenterMap,
                         ),
+                        const SizedBox(height: 8),
+                        _MapActionButton(
+                          icon: Icons.add,
+                          iconColor: colors.onSurface,
+                          tooltip: 'Zoom in',
+                          onPressed: () => _zoomBy(1),
+                        ),
+                        const SizedBox(height: 8),
+                        _MapActionButton(
+                          icon: Icons.remove,
+                          iconColor: colors.onSurface,
+                          tooltip: 'Zoom out',
+                          onPressed: () => _zoomBy(-1),
+                        ),
                         if (ride != null) ...[
                           const SizedBox(height: 8),
                           _MapActionButton(
@@ -465,27 +504,74 @@ class _RideMapScreenState extends State<RideMapScreen>
           ),
         ),
 
-        // Bottom sheet with "Group ride" status, avatars, route card & actions.
+        // Bottom attribution chip + sheet with "Group ride" status & actions.
         Positioned(
           left: 0,
           right: 0,
           bottom: 0,
-          child: _MapBottomSheet(
-            activeRide: ride,
-            positions: positions,
-            isCollapsed: _isSheetCollapsed,
-            onToggleCollapse: () {
-              setState(() {
-                _isSheetCollapsed = !_isSheetCollapsed;
-              });
-            },
-            onOpenConvoy: _openConvoy,
-            onEndRide: widget.onEndRide,
-            onHostRide: widget.onHostRide,
-            onJoinRide: widget.onJoinRide,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // Kept above the bottom sheet on the left so credits never overlap
+              // right-side map controls on compact screens.
+              Padding(
+                padding: const EdgeInsets.only(left: 12, bottom: 6),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: const _MapAttributionChip(),
+                ),
+              ),
+              _MapBottomSheet(
+                activeRide: ride,
+                positions: positions,
+                isCollapsed: _isSheetCollapsed,
+                onToggleCollapse: () {
+                  setState(() {
+                    _isSheetCollapsed = !_isSheetCollapsed;
+                  });
+                },
+                onOpenConvoy: _openConvoy,
+                onEndRide: widget.onEndRide,
+                onHostRide: widget.onHostRide,
+                onJoinRide: widget.onJoinRide,
+              ),
+            ],
           ),
         ),
       ],
+    );
+  }
+}
+
+// Compact map credit pill shown above the bottom sheet for license compliance.
+class _MapAttributionChip extends StatelessWidget {
+  const _MapAttributionChip();
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+
+    return Tooltip(
+      message: 'OpenFreeMap · OpenMapTiles · OpenStreetMap contributors',
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(
+          color: colors.surfaceContainerLow.withValues(alpha: 0.88),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: colors.outlineVariant),
+        ),
+        child: Text(
+          '© OpenFreeMap · OSM',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            fontSize: 10,
+            fontWeight: FontWeight.w600,
+            color: colors.onSurfaceVariant,
+          ),
+        ),
+      ),
     );
   }
 }
@@ -782,10 +868,19 @@ class _MapBottomSheet extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // Drag handle — tap to collapse or expand the sheet.
+              // Drag handle — tap or swipe vertically to collapse or expand.
               GestureDetector(
                 behavior: HitTestBehavior.opaque,
                 onTap: onToggleCollapse,
+                onVerticalDragEnd: (details) {
+                  final velocity = details.primaryVelocity;
+                  if (velocity == null) return;
+                  if (velocity > 100 && !isCollapsed) {
+                    onToggleCollapse();
+                  } else if (velocity < -100 && isCollapsed) {
+                    onToggleCollapse();
+                  }
+                },
                 child: Column(
                   children: [
                     Center(
