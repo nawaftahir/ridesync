@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-11-15 (experiment)
+- Tried OpenFreeMap vector maps (`positron` for light, `dark` for dark mode) in place of the OpenStreetMap picture tiles, with OpenStreetMap as the fallback when offline.
+- Added the `vector_map_tiles` package and set `latlong2` back to `^0.9.1`, because that package does not support `latlong2` 0.10 yet.
+- Added the map credits (OpenFreeMap, OpenMapTiles, OpenStreetMap contributors) on the map.
+
 ## 2026-11-13
 - Added a 4-tab bottom navigation bar (`Map`, `Rides`, `Group`, `Profile`) inside `MainScreen`, with `RidesScreen` (host/join actions + mock past rides), work-in-progress `GroupScreen`, and `ProfileScreen` (rider summary + login link).
 - Redesigned `RideMapScreen` with a floating destination card, `Recenter map` button with `MapController`, mock route polyline, rider name markers, and a collapsible `"Group ride"` bottom sheet (`Live sync` pill, rider avatars, `PICKUP` / `DESTINATION` card, `End Ride` / `Leave` controls, and overflow fix for narrow screens).
