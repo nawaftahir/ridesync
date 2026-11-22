@@ -3,6 +3,7 @@ name: Test & Build Android APK
 on:
   push:
     branches: [main, dev]
+    tags: ['v*']
   pull_request:
     branches: [main, dev]
   workflow_dispatch:
@@ -95,32 +96,19 @@ jobs:
           path: build/app/outputs/flutter-apk/app-release.apk
           retention-days: 14
 
-      - name: Publish rolling APK release
-        if: github.event_name == 'push' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main')
+      - name: Publish APK to GitHub Release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
-            TAG="latest"
-            TITLE="RideSync Latest Build"
-            APK_NAME="RideSync.apk"
-            EXTRA_FLAGS=""
-          else
-            TAG="dev-latest"
-            TITLE="RideSync Dev Build"
-            APK_NAME="RideSync-dev.apk"
-            EXTRA_FLAGS="--prerelease"
-          fi
-
+          TAG="${GITHUB_REF_NAME}"
+          APK_NAME="RideSync-${TAG}.apk"
           cp build/app/outputs/flutter-apk/app-release.apk "$APK_NAME"
 
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" "$APK_NAME" --clobber
-            gh release edit "$TAG" --notes "Latest build from commit \`${{ github.sha }}\` on \`${{ github.ref_name }}\`."
           else
             gh release create "$TAG" "$APK_NAME" \
-              --target "${{ github.sha }}" \
-              --title "$TITLE" \
-              --notes "Latest build from commit \`${{ github.sha }}\` on \`${{ github.ref_name }}\`." \
-              $EXTRA_FLAGS
+              --title "RideSync ${TAG}" \
+              --generate-notes
           fi
