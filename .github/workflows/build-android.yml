@@ -1,0 +1,126 @@
+name: Test & Build Android APK
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+  workflow_dispatch:
+    inputs:
+      api_base_url:
+        description: 'Optional API base URL override (defaults to https://ridesync.ddns.net)'
+        required: false
+        default: ''
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  backend-tests:
+    name: Backend Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: backend/requirements-dev.txt
+
+      - name: Install backend dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Run pytest
+        run: pytest -v
+
+  flutter-android:
+    name: Flutter Tests & Android APK
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Set up Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          flutter-version: '3.50.0'
+          cache: true
+
+      - name: Install Dart & Flutter dependencies
+        run: flutter pub get
+
+      - name: Check formatting
+        run: dart format --output=none --set-exit-if-changed .
+
+      - name: Analyze Dart code
+        run: flutter analyze --no-fatal-infos
+
+      - name: Run Flutter tests
+        run: flutter test
+
+      - name: Build Android APK
+        run: |
+          if [ -n "${{ inputs.api_base_url }}" ]; then
+            flutter build apk --release --dart-define=API_BASE_URL="${{ inputs.api_base_url }}"
+          else
+            flutter build apk --release
+          fi
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ridesync-android-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+          retention-days: 14
+
+      - name: Publish rolling APK release
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            TAG="latest"
+            TITLE="RideSync Latest Build"
+            APK_NAME="RideSync.apk"
+            EXTRA_FLAGS=""
+          else
+            TAG="dev-latest"
+            TITLE="RideSync Dev Build"
+            APK_NAME="RideSync-dev.apk"
+            EXTRA_FLAGS="--prerelease"
+          fi
+
+          cp build/app/outputs/flutter-apk/app-release.apk "$APK_NAME"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$APK_NAME" --clobber
+            gh release edit "$TAG" --notes "Latest build from commit \`${{ github.sha }}\` on \`${{ github.ref_name }}\`."
+          else
+            gh release create "$TAG" "$APK_NAME" \
+              --target "${{ github.sha }}" \
+              --title "$TITLE" \
+              --notes "Latest build from commit \`${{ github.sha }}\` on \`${{ github.ref_name }}\`." \
+              $EXTRA_FLAGS
+          fi
