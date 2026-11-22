@@ -16,6 +16,8 @@ import 'package:ridesync/services/ride_api_service.dart';
 import 'package:ridesync/theme/app_theme.dart';
 import 'package:ridesync/utils/ride_share.dart';
 
+import 'helpers/fake_maplibre_platform.dart';
+
 class _IdleLocationService extends LocationService {
   const _IdleLocationService();
 
@@ -51,6 +53,7 @@ void main() {
 
   setUp(() {
     clipboardText = null;
+    FakeMapLibrePlatform.register();
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(SystemChannels.platform, (call) async {
           if (call.method == 'Clipboard.setData') {

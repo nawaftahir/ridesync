@@ -5,9 +5,12 @@ import 'package:ridesync/models/active_ride.dart';
 import 'package:ridesync/screens/main_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'helpers/fake_maplibre_platform.dart';
+
 void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
+    FakeMapLibrePlatform.register();
   });
 
   testWidgets('RideSyncApp starts on clean live map with 4 tabs', (

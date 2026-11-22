@@ -1,8 +1,9 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
-import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:maplibre/maplibre.dart';
 import 'package:ridesync/models/active_ride.dart';
 import 'package:ridesync/models/rider.dart';
 import 'package:ridesync/models/rider_position.dart';
@@ -10,12 +11,23 @@ import 'package:ridesync/screens/convoy_screen.dart';
 import 'package:ridesync/services/location_service.dart';
 import 'package:ridesync/services/map_search_service.dart';
 import 'package:ridesync/services/ride_api_service.dart';
+import 'package:ridesync/utils/map_styles.dart';
 import 'package:ridesync/utils/ride_share.dart';
-import 'package:ridesync/widgets/open_free_map_layer.dart';
 import 'package:ridesync/widgets/place_search_sheet.dart';
 
 // Initial map camera position shown only before the device gets its first GPS lock.
 const LatLng _kDefaultMapCenter = LatLng(33.7215, 73.0433);
+const double _kMinZoom = 3.0;
+const double _kMaxZoom = 20.0;
+const double _kDefaultZoom = 14.0;
+const double _kStreetZoom = 16.0;
+const double _kMaxPitch = 60.0;
+const double _kTiltedPitch = 45.0;
+
+Geographic _toGeographic(LatLng point) =>
+    Geographic(lon: point.longitude, lat: point.latitude);
+
+LatLng _toLatLng(Geographic point) => LatLng(point.lat, point.lon);
 
 class RideMapScreen extends StatefulWidget {
   const RideMapScreen({
@@ -50,7 +62,7 @@ class RideMapScreen extends StatefulWidget {
 
 class _RideMapScreenState extends State<RideMapScreen>
     with WidgetsBindingObserver {
-  final MapController _mapController = MapController();
+  MapController? _mapController;
 
   StreamSubscription<GpsFix>? _positionSub;
   StreamSubscription<bool>? _serviceStatusSub;
@@ -62,10 +74,15 @@ class _RideMapScreenState extends State<RideMapScreen>
   bool _isSendingPosition = false;
   bool _isFetchingPositions = false;
   bool _followMe = true;
-  bool _isMapReady = false;
   bool _hasInitialGpsCenter = false;
   bool _isSheetCollapsed = false;
   bool _bannerDismissed = false;
+
+  // Map navigation state (bearing for compass needle, pitch for 2D/3D toggle).
+  double _cameraBearing = 0;
+  double _cameraPitch = 0;
+  bool _styleLoadFailed = false;
+  int _mapReloadGeneration = 0;
 
   // Map search, tap-to-pin, and real road route state.
   PlaceResult? _previewPlace;
@@ -83,6 +100,13 @@ class _RideMapScreenState extends State<RideMapScreen>
 
   LatLng? get _activeDestPoint =>
       widget.activeRide?.destinationPoint ?? _remoteDestPoint;
+
+  bool get _isTilted => _cameraPitch >= 15.0;
+
+  bool get _isRotatedOrTilted =>
+      _cameraBearing.abs() >= 1.5 || _cameraPitch >= 1.5;
+
+  CameraPosition? get _currentCamera => _mapController?.camera;
 
   @override
   void initState() {
@@ -133,7 +157,6 @@ class _RideMapScreenState extends State<RideMapScreen>
     _positionSub?.cancel();
     _serviceStatusSub?.cancel();
     _stopBackendSync();
-    _mapController.dispose();
     super.dispose();
   }
 
@@ -260,12 +283,24 @@ class _RideMapScreenState extends State<RideMapScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) return;
     // Re-check automatically when the user returns from phone Settings.
-    if (state == AppLifecycleState.resumed &&
-        (_locationStatus == LocationStatus.deniedForever ||
-            _locationStatus == LocationStatus.serviceDisabled)) {
+    if (_locationStatus == LocationStatus.deniedForever ||
+        _locationStatus == LocationStatus.serviceDisabled) {
       _startLocationTracking();
     }
+    // Retry loading map tiles if the app was launched offline.
+    if (_styleLoadFailed) {
+      _retryMapStyle();
+    }
+  }
+
+  void _retryMapStyle() {
+    setState(() {
+      _styleLoadFailed = false;
+      _mapController = null;
+      _mapReloadGeneration++;
+    });
   }
 
   Future<void> _startLocationTracking({
@@ -327,42 +362,131 @@ class _RideMapScreenState extends State<RideMapScreen>
     if (widget.activeRide != null) {
       _refreshActiveRideRoute();
     }
-    if (!_followMe || !_isMapReady) return;
+    final controller = _mapController;
+    final camera = _currentCamera;
+    if (!_followMe || controller == null || camera == null) return;
 
-    final camera = _mapController.camera;
     // Zoom in to street level once on the first GPS lock; after that, respect
-    // whatever zoom level the rider chose.
-    final targetZoom = !_hasInitialGpsCenter && camera.zoom < 16.0
-        ? 16.0
+    // whatever zoom, rotation, and 3D tilt the rider chose.
+    final targetZoom = !_hasInitialGpsCenter && camera.zoom < _kStreetZoom
+        ? _kStreetZoom
         : camera.zoom;
     final movedEnough =
-        (camera.center.latitude - fix.point.latitude).abs() >= 1e-5 ||
-        (camera.center.longitude - fix.point.longitude).abs() >= 1e-5;
+        (camera.center.lat - fix.point.latitude).abs() >= 1e-5 ||
+        (camera.center.lon - fix.point.longitude).abs() >= 1e-5;
     if (!_hasInitialGpsCenter || movedEnough) {
       _hasInitialGpsCenter = true;
-      _mapController.move(fix.point, targetZoom);
+      unawaited(
+        controller.animateCamera(
+          CameraUpdate.position(
+            center: _toGeographic(fix.point),
+            zoom: targetZoom,
+          ),
+          animation: const CameraAnimation.ease(
+            duration: Duration(milliseconds: 300),
+          ),
+        ),
+      );
     }
+  }
+
+  void _onCameraMoved(CameraPosition camera) {
+    final nextBearing = camera.bearing;
+    final nextPitch = camera.pitch;
+    final bearingChanged = (nextBearing - _cameraBearing).abs() >= 0.8;
+    final pitchChanged = (nextPitch - _cameraPitch).abs() >= 0.8;
+    if (!bearingChanged && !pitchChanged) return;
+    setState(() {
+      _cameraBearing = nextBearing;
+      _cameraPitch = nextPitch;
+    });
   }
 
   void _recenterMap() {
     setState(() {
       _followMe = true;
     });
-    if (!_isMapReady) return;
+    final controller = _mapController;
+    if (controller == null) return;
+    final currentZoom = _currentCamera?.zoom ?? _kDefaultZoom;
     if (_myFix != null) {
       _hasInitialGpsCenter = true;
-      final currentZoom = _mapController.camera.zoom;
-      final targetZoom = currentZoom < 15 ? 16.0 : currentZoom.clamp(3.0, 18.0);
-      _mapController.move(_myFix!.point, targetZoom);
+      final targetZoom = currentZoom < 15.0
+          ? _kStreetZoom
+          : currentZoom.clamp(_kMinZoom, _kMaxZoom);
+      unawaited(
+        controller.animateCamera(
+          CameraUpdate.position(
+            center: _toGeographic(_myFix!.point),
+            zoom: targetZoom,
+          ),
+          animation: const CameraAnimation.ease(
+            duration: Duration(milliseconds: 350),
+          ),
+        ),
+      );
       return;
     }
-    _mapController.move(_kDefaultMapCenter, 14.0);
+    unawaited(
+      controller.animateCamera(
+        CameraUpdate.position(
+          center: _toGeographic(_kDefaultMapCenter),
+          zoom: _kDefaultZoom,
+        ),
+        animation: const CameraAnimation.ease(
+          duration: Duration(milliseconds: 350),
+        ),
+      ),
+    );
   }
 
   void _zoomBy(double delta) {
-    if (!_isMapReady) return;
-    final nextZoom = (_mapController.camera.zoom + delta).clamp(3.0, 18.0);
-    _mapController.move(_mapController.camera.center, nextZoom);
+    final controller = _mapController;
+    final camera = _currentCamera;
+    if (controller == null || camera == null) return;
+    final nextZoom = (camera.zoom + delta).clamp(_kMinZoom, _kMaxZoom);
+    unawaited(
+      controller.animateCamera(
+        CameraUpdate.position(zoom: nextZoom),
+        animation: const CameraAnimation.ease(
+          duration: Duration(milliseconds: 200),
+        ),
+      ),
+    );
+  }
+
+  void _toggle3DTilt() {
+    final controller = _mapController;
+    if (controller == null) return;
+    final targetPitch = _isTilted ? 0.0 : _kTiltedPitch;
+    setState(() {
+      _cameraPitch = targetPitch;
+    });
+    unawaited(
+      controller.animateCamera(
+        CameraUpdate.position(pitch: targetPitch),
+        animation: const CameraAnimation.ease(
+          duration: Duration(milliseconds: 300),
+        ),
+      ),
+    );
+  }
+
+  void _resetNorthAndTilt() {
+    final controller = _mapController;
+    if (controller == null) return;
+    setState(() {
+      _cameraBearing = 0;
+      _cameraPitch = 0;
+    });
+    unawaited(
+      controller.animateCamera(
+        const CameraUpdate.position(bearing: 0, pitch: 0),
+        animation: const CameraAnimation.ease(
+          duration: Duration(milliseconds: 300),
+        ),
+      ),
+    );
   }
 
   Future<void> _openPlaceSearch() async {
@@ -372,8 +496,10 @@ class _RideMapScreenState extends State<RideMapScreen>
       return;
     }
 
+    final cameraCenter = _currentCamera?.center;
     final near =
-        _myFix?.point ?? (_isMapReady ? _mapController.camera.center : null);
+        _myFix?.point ??
+        (cameraCenter == null ? null : _toLatLng(cameraCenter));
     final action = await showModalBottomSheet<PlaceSearchAction>(
       context: context,
       isScrollControlled: true,
@@ -423,9 +549,10 @@ class _RideMapScreenState extends State<RideMapScreen>
 
   Future<void> _selectPreviewPlace(PlaceResult place) async {
     final search = widget.searchService;
+    final cameraCenter = _currentCamera?.center;
     final origin =
         _myFix?.point ??
-        (_isMapReady ? _mapController.camera.center : _kDefaultMapCenter);
+        (cameraCenter == null ? _kDefaultMapCenter : _toLatLng(cameraCenter));
     final reqId = ++_routeRequestId;
 
     setState(() {
@@ -436,9 +563,7 @@ class _RideMapScreenState extends State<RideMapScreen>
       _isLoadingRoute = search != null;
     });
 
-    if (_isMapReady) {
-      _fitCameraToPoints([origin, place.point]);
-    }
+    _fitCameraToPoints([origin, place.point]);
     if (search == null) return;
 
     final route = await search.fetchRoute(from: origin, to: place.point);
@@ -447,9 +572,7 @@ class _RideMapScreenState extends State<RideMapScreen>
       _previewRoute = route;
       _isLoadingRoute = false;
     });
-    if (_isMapReady) {
-      _fitCameraToPoints(route.points);
-    }
+    _fitCameraToPoints(route.points);
   }
 
   void _clearPreview() {
@@ -492,21 +615,35 @@ class _RideMapScreenState extends State<RideMapScreen>
   }
 
   void _fitCameraToPoints(List<LatLng> points) {
-    if (!_isMapReady || points.isEmpty) return;
-    if (points.length == 1) {
-      _mapController.move(points.first, 15.0);
+    final controller = _mapController;
+    if (controller == null || points.isEmpty) return;
+    final geoPoints = points.map(_toGeographic).toList(growable: false);
+    final allSame = geoPoints.every(
+      (p) =>
+          (p.lat - geoPoints.first.lat).abs() < 1e-6 &&
+          (p.lon - geoPoints.first.lon).abs() < 1e-6,
+    );
+    if (geoPoints.length == 1 || allSame) {
+      unawaited(
+        controller.animateCamera(
+          CameraUpdate.position(center: geoPoints.first, zoom: 15.0),
+          animation: const CameraAnimation.ease(
+            duration: Duration(milliseconds: 350),
+          ),
+        ),
+      );
       return;
     }
-    final bounds = LatLngBounds.fromPoints(points);
-    if (bounds.southWest == bounds.northEast) {
-      _mapController.move(points.first, 15.0);
-      return;
-    }
-    _mapController.fitCamera(
-      CameraFit.bounds(
-        bounds: bounds,
-        padding: const EdgeInsets.fromLTRB(48, 120, 48, 250),
-        maxZoom: 16.0,
+    unawaited(
+      controller.animateCamera(
+        CameraUpdate.points(
+          geoPoints,
+          padding: const EdgeInsets.fromLTRB(48, 120, 48, 250),
+          maxZoom: 16.0,
+        ),
+        animation: const CameraAnimation.ease(
+          duration: Duration(milliseconds: 450),
+        ),
       ),
     );
   }
@@ -593,9 +730,9 @@ class _RideMapScreenState extends State<RideMapScreen>
   }) {
     final colors = Theme.of(context).colorScheme;
     return Marker(
-      point: point,
-      width: 108,
-      height: 58,
+      point: _toGeographic(point),
+      size: const Size(108, 58),
+      alignment: Alignment.bottomCenter,
       child: Tooltip(
         message: tooltip,
         child: Column(
@@ -660,6 +797,34 @@ class _RideMapScreenState extends State<RideMapScreen>
     return const [];
   }
 
+  List<Layer> _buildRouteLayers(
+    BuildContext context,
+    List<LatLng> routePoints,
+  ) {
+    if (routePoints.length < 2) return const [];
+    final colors = Theme.of(context).colorScheme;
+    final line = Feature<LineString>(
+      geometry: LineString.from(
+        routePoints.map(_toGeographic).toList(growable: false),
+      ),
+    );
+    return [
+      PolylineLayer(
+        id: 'route-glow',
+        polylines: [line],
+        color: Literal(colors.primary),
+        opacity: const Literal(0.24),
+        width: const Literal(12),
+      ),
+      PolylineLayer(
+        id: 'route-line',
+        polylines: [line],
+        color: Literal(colors.primary),
+        width: const Literal(5),
+      ),
+    ];
+  }
+
   List<Marker> _buildMarkers(
     BuildContext context,
     List<RiderPosition> positions,
@@ -676,9 +841,8 @@ class _RideMapScreenState extends State<RideMapScreen>
     if (routePoints.length >= 2 && _myFix == null) {
       markers.add(
         Marker(
-          point: routePoints.first,
-          width: 22,
-          height: 22,
+          point: _toGeographic(routePoints.first),
+          size: const Size(22, 22),
           child: Container(
             decoration: BoxDecoration(
               color: colors.surfaceContainerLow,
@@ -693,10 +857,9 @@ class _RideMapScreenState extends State<RideMapScreen>
     if (destinationPin != null) {
       markers.add(
         Marker(
-          point: destinationPin,
-          width: 36,
-          height: 36,
-          alignment: Alignment.topCenter,
+          point: _toGeographic(destinationPin),
+          size: const Size(36, 36),
+          alignment: Alignment.bottomCenter,
           child: Icon(Icons.location_on, color: colors.primary, size: 36),
         ),
       );
@@ -750,233 +913,388 @@ class _RideMapScreenState extends State<RideMapScreen>
     final ride = widget.activeRide;
     final positions = _effectivePositions();
     final routePoints = _currentRoutePoints(ride);
+    final markers = _buildMarkers(context, positions, ride, routePoints);
     final showPermissionBanner =
         !_bannerDismissed &&
         (_locationStatus == LocationStatus.denied ||
             _locationStatus == LocationStatus.deniedForever ||
             _locationStatus == LocationStatus.serviceDisabled);
 
-    return Stack(
-      children: [
-        FlutterMap(
-          mapController: _mapController,
-          options: MapOptions(
-            initialCenter: _kDefaultMapCenter,
-            initialZoom: 14, // 1 = world, 14 = street level
-            minZoom: 3,
-            maxZoom: 18,
-            backgroundColor: isDark
-                ? const Color(0xFF0C0C0C)
-                : const Color(0xFFF2F3F0),
-            cameraConstraint: const CameraConstraint.containLatitude(),
-            // Keep north-up so pre-rendered street names don't spin upside
-            // down from an accidental two-finger twist.
-            interactionOptions: const InteractionOptions(
-              flags: InteractiveFlag.all & ~InteractiveFlag.rotate,
+    return ColoredBox(
+      color: OpenFreeMapStyles.canvasColor(isDark: isDark),
+      child: Stack(
+        children: [
+          MapLibreMap(
+            key: ValueKey('ridesync-map-$_mapReloadGeneration'),
+            options: MapOptions(
+              style: OpenFreeMapStyles.forBrightness(isDark: isDark),
+              initCamera: CameraUpdate.position(
+                center: _toGeographic(_myFix?.point ?? _kDefaultMapCenter),
+                zoom: _myFix != null ? _kStreetZoom : _kDefaultZoom,
+              ),
+              minZoom: _kMinZoom,
+              maxZoom: _kMaxZoom,
+              minPitch: 0,
+              maxPitch: _kMaxPitch,
+              movements: const MapMovements(
+                pan: true,
+                zoom: true,
+                rotate: true,
+                pitch: true,
+              ),
+              gestures: const MapGestures(rotateThreshold: 12),
             ),
-            onTap: (_, point) {
-              if (_isPickingOnMap && ride == null) {
-                _pickPointOnMap(point);
-              }
-            },
-            onLongPress: (_, point) {
-              if (ride == null && widget.searchService != null) {
-                _pickPointOnMap(point);
-              }
-            },
-            onMapReady: () {
-              _isMapReady = true;
+            onMapCreated: (controller) {
+              _mapController = controller;
               final myPoint = _myFix?.point;
-              if (_followMe && myPoint != null) {
+              if (_followMe && myPoint != null && !_hasInitialGpsCenter) {
                 _hasInitialGpsCenter = true;
-                _mapController.move(myPoint, 16);
+                unawaited(
+                  controller.moveCamera(
+                    CameraUpdate.position(
+                      center: _toGeographic(myPoint),
+                      zoom: _kStreetZoom,
+                    ),
+                  ),
+                );
               }
             },
-            onPositionChanged: (_, hasGesture) {
-              if (hasGesture && _followMe) {
+            onStyleLoaded: (_) {
+              if (_styleLoadFailed && mounted) {
+                setState(() => _styleLoadFailed = false);
+              }
+            },
+            onError: (event) {
+              if (event.kind == MapErrorKind.style &&
+                  !_styleLoadFailed &&
+                  mounted) {
+                setState(() => _styleLoadFailed = true);
+              }
+            },
+            onClick: (event) {
+              if (_isPickingOnMap && ride == null) {
+                _pickPointOnMap(_toLatLng(event.point));
+              }
+            },
+            onLongClick: (event) {
+              if (ride == null && widget.searchService != null) {
+                _pickPointOnMap(_toLatLng(event.point));
+              }
+            },
+            onCameraMoveStart: (event) {
+              if (event.reason == CameraChangeReason.gesture && _followMe) {
                 setState(() {
                   _followMe = false;
                 });
               }
             },
+            onCameraMove: (event) => _onCameraMoved(event.camera),
+            onCameraMoveEnd: (event) => _onCameraMoved(event.camera),
+            layers: _buildRouteLayers(context, routePoints),
+            children: [if (markers.isNotEmpty) WidgetLayer(markers: markers)],
           ),
-          children: [
-            // OpenFreeMap vector map (falls back to OpenStreetMap if offline).
-            OpenFreeMapLayer(isDark: isDark),
-            if (routePoints.length >= 2)
-              PolylineLayer(
-                polylines: [
-                  Polyline(
-                    points: routePoints,
-                    strokeWidth: 12,
-                    color: colors.primary.withValues(alpha: 0.22),
+
+          // Top floating destination card, banners, speed pill, and map controls.
+          SafeArea(
+            bottom: false,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _MapTopCard(
+                    activeRide: ride,
+                    previewPlace: _previewPlace,
+                    onTapSearch: _openPlaceSearch,
+                    onClearPreview: _clearPreview,
+                    onCopyCode: ride == null
+                        ? null
+                        : () => copyRideCode(context, ride.joinCode),
+                    onShareRide: ride == null
+                        ? null
+                        : () => shareRideInvite(
+                            code: ride.joinCode,
+                            destination: ride.destination,
+                            serverBaseUrl: widget.apiService?.cleanBaseUrl,
+                            onShareOverride: widget.onShareOverride,
+                          ),
                   ),
-                  Polyline(
-                    points: routePoints,
-                    strokeWidth: 5,
-                    color: colors.primary,
+                  if (_isPickingOnMap && ride == null) ...[
+                    const SizedBox(height: 8),
+                    _PickOnMapBanner(
+                      onCancel: () {
+                        setState(() {
+                          _isPickingOnMap = false;
+                        });
+                      },
+                    ),
+                  ],
+                  if (_styleLoadFailed) ...[
+                    const SizedBox(height: 8),
+                    _MapOfflineBanner(onRetry: _retryMapStyle),
+                  ],
+                  if (showPermissionBanner) ...[
+                    const SizedBox(height: 8),
+                    _LocationBanner(
+                      status: _locationStatus,
+                      onAction: _handlePermissionAction,
+                      onDismiss: () {
+                        setState(() {
+                          _bannerDismissed = true;
+                        });
+                      },
+                    ),
+                  ],
+                  const SizedBox(height: 10),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      _SpeedPill(speedKmh: _myFix?.speedKmh),
+                      Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (_isRotatedOrTilted) ...[
+                            _CompassResetButton(
+                              bearingDegrees: _cameraBearing,
+                              onPressed: _resetNorthAndTilt,
+                            ),
+                            const SizedBox(height: 8),
+                          ],
+                          _TiltToggleButton(
+                            isTilted: _isTilted,
+                            onPressed: _toggle3DTilt,
+                          ),
+                          const SizedBox(height: 8),
+                          _MapActionButton(
+                            icon: _followMe
+                                ? Icons.my_location
+                                : Icons.location_searching,
+                            iconColor: _followMe
+                                ? colors.primary
+                                : colors.onSurfaceVariant,
+                            tooltip: 'Recenter map',
+                            onPressed: _recenterMap,
+                          ),
+                          const SizedBox(height: 8),
+                          _MapActionButton(
+                            icon: Icons.add,
+                            iconColor: colors.onSurface,
+                            tooltip: 'Zoom in',
+                            onPressed: () => _zoomBy(1),
+                          ),
+                          const SizedBox(height: 8),
+                          _MapActionButton(
+                            icon: Icons.remove,
+                            iconColor: colors.onSurface,
+                            tooltip: 'Zoom out',
+                            onPressed: () => _zoomBy(-1),
+                          ),
+                          if (ride != null) ...[
+                            const SizedBox(height: 8),
+                            _MapActionButton(
+                              icon: Icons.people_outline,
+                              iconColor: colors.primary,
+                              tooltip: 'Convoy riders',
+                              onPressed: _openConvoy,
+                            ),
+                          ],
+                        ],
+                      ),
+                    ],
                   ),
                 ],
               ),
-            MarkerLayer(
-              markers: _buildMarkers(context, positions, ride, routePoints),
             ),
-          ],
-        ),
+          ),
 
-        // Top floating destination card, permission banner, speed pill, and buttons.
-        SafeArea(
-          bottom: false,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+          // Bottom attribution chip + sheet with "Group ride" status & actions.
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                _MapTopCard(
-                  activeRide: ride,
-                  previewPlace: _previewPlace,
-                  onTapSearch: _openPlaceSearch,
-                  onClearPreview: _clearPreview,
-                  onCopyCode: ride == null
-                      ? null
-                      : () => copyRideCode(context, ride.joinCode),
-                  onShareRide: ride == null
-                      ? null
-                      : () => shareRideInvite(
-                          code: ride.joinCode,
-                          destination: ride.destination,
-                          serverBaseUrl: widget.apiService?.cleanBaseUrl,
-                          onShareOverride: widget.onShareOverride,
-                        ),
+                // Kept above the bottom sheet on the left so credits never overlap
+                // right-side map controls on compact screens.
+                Padding(
+                  padding: const EdgeInsets.only(left: 12, bottom: 6),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: const _MapAttributionChip(),
+                  ),
                 ),
-                if (_isPickingOnMap && ride == null) ...[
-                  const SizedBox(height: 8),
-                  _PickOnMapBanner(
-                    onCancel: () {
+                if (ride == null && _previewPlace != null)
+                  _PreviewDestinationCard(
+                    place: _previewPlace!,
+                    route: _previewRoute,
+                    isLoadingRoute: _isLoadingRoute,
+                    onHostHere: () {
+                      final place = _previewPlace!;
+                      final route = _previewRoute;
+                      if (widget.onHostRideWithPlace != null) {
+                        widget.onHostRideWithPlace!(
+                          place,
+                          route,
+                          _myFix?.point,
+                        );
+                      } else {
+                        widget.onHostRide();
+                      }
+                    },
+                    onClose: _clearPreview,
+                  )
+                else
+                  _MapBottomSheet(
+                    activeRide: ride,
+                    routePreview: _activeRoute,
+                    positions: positions,
+                    isCollapsed: _isSheetCollapsed,
+                    onToggleCollapse: () {
                       setState(() {
-                        _isPickingOnMap = false;
+                        _isSheetCollapsed = !_isSheetCollapsed;
                       });
                     },
+                    onOpenConvoy: _openConvoy,
+                    onEndRide: widget.onEndRide,
+                    onHostRide: widget.onHostRide,
+                    onJoinRide: widget.onJoinRide,
                   ),
-                ],
-                if (showPermissionBanner) ...[
-                  const SizedBox(height: 8),
-                  _LocationBanner(
-                    status: _locationStatus,
-                    onAction: _handlePermissionAction,
-                    onDismiss: () {
-                      setState(() {
-                        _bannerDismissed = true;
-                      });
-                    },
-                  ),
-                ],
-                const SizedBox(height: 10),
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    _SpeedPill(speedKmh: _myFix?.speedKmh),
-                    Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        _MapActionButton(
-                          icon: _followMe
-                              ? Icons.my_location
-                              : Icons.location_searching,
-                          iconColor: _followMe
-                              ? colors.primary
-                              : colors.onSurfaceVariant,
-                          tooltip: 'Recenter map',
-                          onPressed: _recenterMap,
-                        ),
-                        const SizedBox(height: 8),
-                        _MapActionButton(
-                          icon: Icons.add,
-                          iconColor: colors.onSurface,
-                          tooltip: 'Zoom in',
-                          onPressed: () => _zoomBy(1),
-                        ),
-                        const SizedBox(height: 8),
-                        _MapActionButton(
-                          icon: Icons.remove,
-                          iconColor: colors.onSurface,
-                          tooltip: 'Zoom out',
-                          onPressed: () => _zoomBy(-1),
-                        ),
-                        if (ride != null) ...[
-                          const SizedBox(height: 8),
-                          _MapActionButton(
-                            icon: Icons.people_outline,
-                            iconColor: colors.primary,
-                            tooltip: 'Convoy riders',
-                            onPressed: _openConvoy,
-                          ),
-                        ],
-                      ],
-                    ),
-                  ],
-                ),
               ],
             ),
           ),
-        ),
+        ],
+      ),
+    );
+  }
+}
 
-        // Bottom attribution chip + sheet with "Group ride" status & actions.
-        Positioned(
-          left: 0,
-          right: 0,
-          bottom: 0,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              // Kept above the bottom sheet on the left so credits never overlap
-              // right-side map controls on compact screens.
-              Padding(
-                padding: const EdgeInsets.only(left: 12, bottom: 6),
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: const _MapAttributionChip(),
-                ),
+// Shown if the vector map style fails to load (e.g., launched offline).
+class _MapOfflineBanner extends StatelessWidget {
+  const _MapOfflineBanner({required this.onRetry});
+
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return Material(
+      color: colors.surfaceContainerLow,
+      elevation: 3,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(14),
+        side: BorderSide(color: colors.outlineVariant),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 4, 4, 4),
+        child: Row(
+          children: [
+            Icon(Icons.cloud_off, size: 18, color: colors.onSurfaceVariant),
+            const SizedBox(width: 8),
+            const Expanded(
+              child: Text(
+                'Map tiles offline — check connection',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
               ),
-              if (ride == null && _previewPlace != null)
-                _PreviewDestinationCard(
-                  place: _previewPlace!,
-                  route: _previewRoute,
-                  isLoadingRoute: _isLoadingRoute,
-                  onHostHere: () {
-                    final place = _previewPlace!;
-                    final route = _previewRoute;
-                    if (widget.onHostRideWithPlace != null) {
-                      widget.onHostRideWithPlace!(place, route, _myFix?.point);
-                    } else {
-                      widget.onHostRide();
-                    }
-                  },
-                  onClose: _clearPreview,
-                )
-              else
-                _MapBottomSheet(
-                  activeRide: ride,
-                  routePreview: _activeRoute,
-                  positions: positions,
-                  isCollapsed: _isSheetCollapsed,
-                  onToggleCollapse: () {
-                    setState(() {
-                      _isSheetCollapsed = !_isSheetCollapsed;
-                    });
-                  },
-                  onOpenConvoy: _openConvoy,
-                  onEndRide: widget.onEndRide,
-                  onHostRide: widget.onHostRide,
-                  onJoinRide: widget.onJoinRide,
-                ),
-            ],
+            ),
+            TextButton(onPressed: onRetry, child: const Text('Retry')),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// Rotating North compass button shown whenever the map is twisted or tilted.
+class _CompassResetButton extends StatelessWidget {
+  const _CompassResetButton({
+    required this.bearingDegrees,
+    required this.onPressed,
+  });
+
+  final double bearingDegrees;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return Tooltip(
+      message: 'Reset to North',
+      child: Material(
+        color: colors.surfaceContainerLow,
+        elevation: 3,
+        shadowColor: Colors.black.withValues(alpha: 0.18),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(14),
+          side: BorderSide(color: colors.primary),
+        ),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(14),
+          onTap: onPressed,
+          child: SizedBox(
+            width: 44,
+            height: 44,
+            child: Transform.rotate(
+              angle: -bearingDegrees * math.pi / 180.0,
+              child: Icon(
+                Icons.navigation_rounded,
+                size: 20,
+                color: colors.primary,
+              ),
+            ),
           ),
         ),
-      ],
+      ),
+    );
+  }
+}
+
+// One-tap 2D / 3D perspective tilt toggle button.
+class _TiltToggleButton extends StatelessWidget {
+  const _TiltToggleButton({required this.isTilted, required this.onPressed});
+
+  final bool isTilted;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return Tooltip(
+      message: isTilted ? 'Switch to 2D view' : 'Switch to 3D tilt',
+      child: Material(
+        color: isTilted ? colors.primaryContainer : colors.surfaceContainerLow,
+        elevation: 3,
+        shadowColor: Colors.black.withValues(alpha: 0.18),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(14),
+          side: BorderSide(
+            color: isTilted ? colors.primary : colors.outlineVariant,
+          ),
+        ),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(14),
+          onTap: onPressed,
+          child: SizedBox(
+            width: 44,
+            height: 44,
+            child: Center(
+              child: Text(
+                isTilted ? '2D' : '3D',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w800,
+                  color: isTilted
+                      ? colors.onPrimaryContainer
+                      : colors.onSurface,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

@@ -1,13 +1,14 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:ridesync/screens/main_screen.dart';
 import 'package:ridesync/services/location_service.dart';
 import 'package:ridesync/theme/app_theme.dart';
+
+import 'helpers/fake_maplibre_platform.dart';
 
 class _FakeLocationService extends LocationService {
   _FakeLocationService({
@@ -58,6 +59,12 @@ Position _buildPosition({required double speedMetersPerSec}) {
 }
 
 void main() {
+  late FakeMapLibrePlatform fakeMap;
+
+  setUp(() {
+    fakeMap = FakeMapLibrePlatform.register();
+  });
+
   test('GpsFix converts m/s to km/h and clamps negative speed to zero', () {
     final moving = GpsFix.fromPosition(_buildPosition(speedMetersPerSec: 10));
     expect(moving.speedKmh, closeTo(36.0, 0.01));
@@ -223,27 +230,25 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    final controller = tester
-        .widget<FlutterMap>(find.byType(FlutterMap))
-        .mapController!;
+    final state = fakeMap.latestState!;
 
     // First fix auto-zooms to street level (16).
     const firstPoint = LatLng(33.7250, 73.0480);
     fixController.add(const GpsFix(point: firstPoint, speedKmh: 20.0));
     await tester.pumpAndSettle();
-    expect(controller.camera.zoom, equals(16));
-    expect(controller.camera.center.latitude, closeTo(33.7250, 1e-4));
+    expect(state.camera!.zoom, equals(16));
+    expect(state.camera!.center.lat, closeTo(33.7250, 1e-4));
 
     // User zooms out twice to zoom 14; subsequent fixes must keep zoom 14.
     await tester.tap(find.byTooltip('Zoom out'));
     await tester.tap(find.byTooltip('Zoom out'));
     await tester.pumpAndSettle();
-    expect(controller.camera.zoom, equals(14));
+    expect(state.camera!.zoom, equals(14));
 
     const secondPoint = LatLng(33.7290, 73.0510);
     fixController.add(const GpsFix(point: secondPoint, speedKmh: 30.0));
     await tester.pumpAndSettle();
-    expect(controller.camera.zoom, equals(14));
-    expect(controller.camera.center.latitude, closeTo(33.7290, 1e-4));
+    expect(state.camera!.zoom, equals(14));
+    expect(state.camera!.center.lat, closeTo(33.7290, 1e-4));
   });
 }

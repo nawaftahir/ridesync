@@ -12,6 +12,8 @@ import 'package:ridesync/services/ride_api_service.dart';
 import 'package:ridesync/theme/app_theme.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'helpers/fake_maplibre_platform.dart';
+
 class _IdleLocationService extends LocationService {
   const _IdleLocationService();
 
@@ -32,6 +34,7 @@ class _IdleLocationService extends LocationService {
 void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
+    FakeMapLibrePlatform.register();
   });
 
   test(

@@ -14,6 +14,8 @@ import 'package:ridesync/services/ride_api_service.dart';
 import 'package:ridesync/theme/app_theme.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'helpers/fake_maplibre_platform.dart';
+
 class _FakeLocationService extends LocationService {
   _FakeLocationService(this.stream);
 
@@ -33,6 +35,10 @@ class _FakeLocationService extends LocationService {
 }
 
 void main() {
+  setUp(() {
+    FakeMapLibrePlatform.register();
+  });
+
   test('RideApiService handles disabled URL and trailing slashes', () {
     final disabled = RideApiService(baseUrl: '   ');
     expect(disabled.isEnabled, isFalse);
@@ -389,9 +395,9 @@ void main() {
     await tester.tap(find.text('Start Ride'));
     await tester.pumpAndSettle();
 
-    // Active ride fetched peer Zain from /rides/LIVE42/positions.
+    // Active ride fetched peer Zain from /rides/LIVE42/positions (marker + sheet).
     expect(find.text('LIVE42'), findsOneWidget);
-    expect(find.text('Zain'), findsOneWidget);
+    expect(find.text('Zain'), findsNWidgets(2));
 
     fixController.add(
       const GpsFix(point: LatLng(33.79, 72.92), speedKmh: 40.0),

@@ -35,9 +35,7 @@ dependencies:
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
   # Map & Routing
-  flutter_map: ^8.3.2
   latlong2: ^0.9.1
-  vector_map_tiles: ^9.0.0-beta.8
   http: ^1.6.0
   # GPS
   geolocator: ^14.1.1
@@ -48,6 +46,13 @@ dependencies:
   shared_preferences: ^2.5.6
   share_plus: ^13.3.1
   app_links: ^7.2.2
+  maplibre: ^0.4.0
+
+hooks:
+  user_defines:
+    maplibre_native_ffi:
+      backend:
+        android: vulkan
 
 
 dev_dependencies:
