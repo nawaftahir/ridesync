@@ -1,9 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:ridesync/models/active_ride.dart';
 import 'package:ridesync/repositories/ride_repository.dart';
+import 'package:ridesync/services/ride_api_service.dart';
 
 class JoinRideScreen extends StatefulWidget {
-  const JoinRideScreen({super.key});
+  const JoinRideScreen({super.key, this.apiService, this.riderName = 'Nawaf'});
+
+  final RideApiService? apiService;
+  final String riderName;
 
   @override
   State<JoinRideScreen> createState() => _JoinRideScreenState();
@@ -18,15 +22,45 @@ class _JoinRideScreenState extends State<JoinRideScreen> {
 
   // async/await: this function pauses at `await` without freezing the UI.
   Future<void> _onJoinTapped() async {
+    final code = _codeController.text.trim().toUpperCase();
+    if (code.isEmpty) {
+      setState(() {
+        _errorMessage = 'Enter a 6-character ride code.';
+      });
+      return;
+    }
+
     setState(() {
       _errorMessage = null;
       _isLoading = true;
     });
 
-    // Simulates a network round-trip. Replace with a real API call later.
+    final api = widget.apiService;
+    if (api != null && api.isEnabled) {
+      try {
+        final joined = await api.joinRide(
+          code: code,
+          riderName: widget.riderName,
+        );
+        if (!mounted) return;
+        setState(() {
+          _isLoading = false;
+        });
+        Navigator.of(context).pop(joined);
+      } on RideApiException catch (error) {
+        if (!mounted) return;
+        setState(() {
+          _errorMessage = error.message;
+          _isLoading = false;
+        });
+      }
+      return;
+    }
+
+    // Offline mock-preview fallback.
     await Future.delayed(const Duration(milliseconds: 800));
 
-    final ride = _rideRepository.findByCode(_codeController.text);
+    final ride = _rideRepository.findByCode(code);
 
     // `mounted` check: if the user left this screen during the delay, stop.
     if (!mounted) return;
@@ -34,7 +68,7 @@ class _JoinRideScreenState extends State<JoinRideScreen> {
     if (ride == null) {
       setState(() {
         _errorMessage =
-            'No ride found for "${_codeController.text.toUpperCase()}". '
+            'No ride found for "$code". '
             'Try MOTO89 or RIDE42.';
         _isLoading = false;
       });
@@ -51,6 +85,7 @@ class _JoinRideScreenState extends State<JoinRideScreen> {
         destination: ride.destination,
         isHost: false,
         distanceKm: ride.distanceKm,
+        currentUserName: widget.riderName,
       ),
     );
   }
@@ -109,12 +144,14 @@ class _JoinRideScreenState extends State<JoinRideScreen> {
             ),
             const SizedBox(height: 32),
 
-            // Alpha hint card — remove before real release.
+            // Info card showing whether we are using a live server or mock preview.
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(16),
                 child: Text(
-                  '🛈  Alpha hint: valid codes are MOTO89 and RIDE42',
+                  widget.apiService?.isEnabled == true
+                      ? 'Connected to ${widget.apiService!.cleanBaseUrl} · Enter any live ride code.'
+                      : '🛈  Alpha hint: valid codes are MOTO89 and RIDE42',
                   style: text.bodySmall,
                 ),
               ),

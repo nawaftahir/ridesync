@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-11-18
+- Added the FastAPI + MariaDB [backend](backend/README.md) (`users`, `rides`, `ride_members`, `positions` schema, REST endpoints for creating/joining/syncing/ending rides, `init_db.py`, Windows `start.bat` launcher, and `pytest` coverage).
+- Wired `HostRideScreen`, `JoinRideScreen`, `RideMapScreen`, `MainScreen`, and `ProfileScreen` to the backend via `RideApiService` (with live 2s GPS upload / 3s convoy polling, host end-ride notifications, in-app Server URL presets + `/health` tester, offline mock preview fallback, Android debug cleartext HTTP support, and `test/ride_api_service_test.dart`).
+
 ## 2026-11-15
 - Switched ride map tiles to OpenFreeMap vector maps (`positron` light, `dark` dark) with OpenStreetMap fallback, separate light/dark theme cache keys, pooled HTTP tile requests, opposite-theme prefetching, zoom/navigation fixes (`3..18`, rotation lock, zoom buttons, non-overlapping credits), and a vertically swipeable `"Group ride"` bottom sheet.
 - Added `vector_map_tiles`, pinned `latlong2` to `^0.9.1`, and tuned Android Gradle wrapper/daemon/memory settings.

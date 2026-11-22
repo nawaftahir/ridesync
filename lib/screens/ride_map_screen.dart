@@ -5,10 +5,12 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:ridesync/data/mock_map_data.dart';
 import 'package:ridesync/models/active_ride.dart';
+import 'package:ridesync/models/rider.dart';
 import 'package:ridesync/models/rider_position.dart';
 import 'package:ridesync/repositories/rider_repository.dart';
 import 'package:ridesync/screens/convoy_screen.dart';
 import 'package:ridesync/services/location_service.dart';
+import 'package:ridesync/services/ride_api_service.dart';
 import 'package:ridesync/widgets/open_free_map_layer.dart';
 
 class RideMapScreen extends StatefulWidget {
@@ -20,6 +22,8 @@ class RideMapScreen extends StatefulWidget {
     required this.onJoinRide,
     this.riderRepository = const RiderRepository(),
     this.locationService = const LocationService(),
+    this.apiService,
+    this.onRidersUpdated,
   });
 
   final ActiveRide? activeRide;
@@ -28,6 +32,8 @@ class RideMapScreen extends StatefulWidget {
   final VoidCallback onJoinRide;
   final RiderRepository riderRepository;
   final LocationService locationService;
+  final RideApiService? apiService;
+  final ValueChanged<List<RiderPosition>>? onRidersUpdated;
 
   @override
   State<RideMapScreen> createState() => _RideMapScreenState();
@@ -39,13 +45,22 @@ class _RideMapScreenState extends State<RideMapScreen>
 
   StreamSubscription<GpsFix>? _positionSub;
   StreamSubscription<bool>? _serviceStatusSub;
+  Timer? _syncTimer;
   LocationStatus _locationStatus = LocationStatus.checking;
   GpsFix? _myFix;
+  List<RiderPosition> _liveRiders = const [];
+  DateTime? _lastPositionSentAt;
+  bool _isSendingPosition = false;
+  bool _isFetchingPositions = false;
   bool _followMe = true;
   bool _isMapReady = false;
   bool _hasInitialGpsCenter = false;
   bool _isSheetCollapsed = false;
   bool _bannerDismissed = false;
+
+  bool get _isLiveBackendRide =>
+      widget.apiService?.isEnabled == true &&
+      widget.activeRide?.currentUserId != null;
 
   @override
   void initState() {
@@ -53,6 +68,27 @@ class _RideMapScreenState extends State<RideMapScreen>
     WidgetsBinding.instance.addObserver(this);
     _listenServiceStatus();
     _startLocationTracking();
+    if (_isLiveBackendRide) {
+      _startBackendSync();
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant RideMapScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final rideChanged =
+        oldWidget.activeRide?.joinCode != widget.activeRide?.joinCode ||
+        oldWidget.activeRide?.currentUserId !=
+            widget.activeRide?.currentUserId ||
+        oldWidget.apiService != widget.apiService;
+    if (!rideChanged) return;
+
+    _stopBackendSync();
+    _liveRiders = const [];
+    _lastPositionSentAt = null;
+    if (_isLiveBackendRide) {
+      _startBackendSync();
+    }
   }
 
   @override
@@ -60,8 +96,100 @@ class _RideMapScreenState extends State<RideMapScreen>
     WidgetsBinding.instance.removeObserver(this);
     _positionSub?.cancel();
     _serviceStatusSub?.cancel();
+    _stopBackendSync();
     _mapController.dispose();
     super.dispose();
+  }
+
+  void _startBackendSync() {
+    _stopBackendSync();
+    _refreshRemotePositions();
+    if (_myFix != null) {
+      _sendPositionIfNeeded(_myFix!);
+    }
+    _syncTimer = Timer.periodic(
+      const Duration(seconds: 3),
+      (_) => _refreshRemotePositions(),
+    );
+  }
+
+  void _stopBackendSync() {
+    _syncTimer?.cancel();
+    _syncTimer = null;
+  }
+
+  Future<void> _sendPositionIfNeeded(GpsFix fix) async {
+    final api = widget.apiService;
+    final ride = widget.activeRide;
+    final userId = ride?.currentUserId;
+    if (api == null || !api.isEnabled || ride == null || userId == null) {
+      return;
+    }
+    if (_isSendingPosition) return;
+    final now = DateTime.now();
+    if (_lastPositionSentAt != null &&
+        now.difference(_lastPositionSentAt!) < const Duration(seconds: 2)) {
+      return;
+    }
+
+    _isSendingPosition = true;
+    _lastPositionSentAt = now;
+    try {
+      await api.sendPosition(
+        code: ride.joinCode,
+        userId: userId,
+        latitude: fix.point.latitude,
+        longitude: fix.point.longitude,
+        speedKmh: fix.speedKmh,
+      );
+    } on RideApiException {
+      // Ignore temporary network blips so GPS tracking keeps running smoothly.
+    } finally {
+      _isSendingPosition = false;
+    }
+  }
+
+  Future<void> _refreshRemotePositions() async {
+    final api = widget.apiService;
+    final ride = widget.activeRide;
+    if (api == null ||
+        !api.isEnabled ||
+        ride == null ||
+        ride.currentUserId == null ||
+        _isFetchingPositions) {
+      return;
+    }
+
+    _isFetchingPositions = true;
+    final code = ride.joinCode;
+    try {
+      final snapshot = await api.fetchPositions(code);
+      if (!mounted || widget.activeRide?.joinCode != code) return;
+
+      if (snapshot.isEnded) {
+        _stopBackendSync();
+        setState(() {
+          _liveRiders = const [];
+        });
+        widget.onRidersUpdated?.call(const []);
+        if (!ride.isHost) {
+          ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+            SnackBar(content: Text('Ride $code was ended by the host.')),
+          );
+          widget.onEndRide();
+        }
+        return;
+      }
+
+      setState(() {
+        _liveRiders = snapshot.riders;
+      });
+      widget.onRidersUpdated?.call(snapshot.riders);
+    } on RideApiException {
+      // Keep the last known positions on screen if a single poll fails.
+    } finally {
+      _isFetchingPositions = false;
+    }
   }
 
   void _listenServiceStatus() {
@@ -145,6 +273,9 @@ class _RideMapScreenState extends State<RideMapScreen>
       _locationStatus = LocationStatus.ready;
       _myFix = fix;
     });
+    if (_isLiveBackendRide) {
+      _sendPositionIfNeeded(fix);
+    }
     if (!_followMe || !_isMapReady) return;
 
     final camera = _mapController.camera;
@@ -200,10 +331,52 @@ class _RideMapScreenState extends State<RideMapScreen>
     }
   }
 
-  // Updates the first rider with live GPS data when a real fix is available.
+  // Updates the current rider with live GPS data when a real fix is available.
   List<RiderPosition> _effectivePositions() {
-    final base = widget.riderRepository.positions;
     final fix = _myFix;
+    if (_isLiveBackendRide) {
+      final ride = widget.activeRide!;
+      final myId = ride.currentUserId!;
+      final merged = <RiderPosition>[];
+      var foundMe = false;
+
+      for (final pos in _liveRiders) {
+        if (pos.rider.id == myId && fix != null) {
+          foundMe = true;
+          merged.add(
+            RiderPosition(
+              rider: pos.rider,
+              latitude: fix.point.latitude,
+              longitude: fix.point.longitude,
+              speedKmh: fix.speedKmh,
+              headingDegrees: pos.headingDegrees,
+              batteryPercent: pos.batteryPercent,
+              ageSeconds: 0,
+            ),
+          );
+        } else {
+          merged.add(pos);
+        }
+      }
+
+      if (!foundMe && fix != null) {
+        merged.insert(
+          0,
+          RiderPosition(
+            rider: Rider(id: myId, name: ride.currentUserName),
+            latitude: fix.point.latitude,
+            longitude: fix.point.longitude,
+            speedKmh: fix.speedKmh,
+            headingDegrees: 0,
+            batteryPercent: null,
+            ageSeconds: 0,
+          ),
+        );
+      }
+      return merged;
+    }
+
+    final base = widget.riderRepository.positions;
     if (fix == null || base.isEmpty) return base;
     final me = base.first;
     return [
@@ -324,8 +497,16 @@ class _RideMapScreenState extends State<RideMapScreen>
         ),
       ]);
 
-      // Skip the first mock rider if live GPS is active (replaced by "You").
-      final peerRiders = _myFix == null ? positions : positions.skip(1);
+      // Avoid drawing a duplicate marker for the current rider when "You" is shown.
+      final myId = widget.activeRide?.currentUserId;
+      final Iterable<RiderPosition> peerRiders;
+      if (_isLiveBackendRide) {
+        peerRiders = _myFix == null
+            ? positions
+            : positions.where((p) => p.rider.id != myId);
+      } else {
+        peerRiders = _myFix == null ? positions : positions.skip(1);
+      }
       for (final position in peerRiders) {
         final dotColor = position.isStale ? colors.tertiary : colors.secondary;
         markers.add(

@@ -1,0 +1,1 @@
+"""RideSync FastAPI backend package."""

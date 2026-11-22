@@ -7,7 +7,7 @@ const double kMapCenterLat = 33.7215;
 const double kMapCenterLng = 73.0433;
 const String kMockPickupLabel = 'F-6, Islamabad';
 
-// Mock route from F-6 towards Daman-e-Koh for the Week 1 UI preview.
+// Mock route from F-6 towards Daman-e-Koh for the UI preview.
 const List<LatLng> kMockRoutePoints = [
   LatLng(33.7190, 73.0410),
   LatLng(33.7215, 73.0433),

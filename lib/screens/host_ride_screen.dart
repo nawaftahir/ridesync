@@ -2,9 +2,13 @@ import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:ridesync/models/active_ride.dart';
+import 'package:ridesync/services/ride_api_service.dart';
 
 class HostRideScreen extends StatefulWidget {
-  const HostRideScreen({super.key});
+  const HostRideScreen({super.key, this.apiService, this.hostName = 'Nawaf'});
+
+  final RideApiService? apiService;
+  final String hostName;
 
   @override
   State<HostRideScreen> createState() => _HostRideScreenState();
@@ -16,8 +20,11 @@ class _HostRideScreenState extends State<HostRideScreen> {
 
   // The generated code. null = not generated yet → code card is hidden.
   String? _joinCode;
+  ActiveRide? _createdRide;
+  String? _errorMessage;
+  bool _isLoading = false;
 
-  // Builds a random 6-letter uppercase code, e.g. "KXMQTB".
+  // Builds a random 6-letter uppercase code, e.g. "KXMQTB" (offline mode only).
   // ASCII 65 = 'A', so 65 + 0…25 gives A…Z.
   String _generateCode() {
     final random = Random();
@@ -28,27 +35,60 @@ class _HostRideScreenState extends State<HostRideScreen> {
     return code;
   }
 
-  void _onGenerateTapped() {
-    if (_destinationController.text.trim().isEmpty) {
+  Future<void> _onGenerateTapped() async {
+    final destination = _destinationController.text.trim();
+    if (destination.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Enter a destination first.')),
       );
       return;
     }
-    // setState() tells Flutter to redraw — the code card will appear.
+
+    final api = widget.apiService;
+    if (api == null || !api.isEnabled) {
+      // Offline mock-preview mode.
+      setState(() {
+        _errorMessage = null;
+        _createdRide = null;
+        _joinCode = _generateCode();
+      });
+      return;
+    }
+
     setState(() {
-      _joinCode = _generateCode();
+      _isLoading = true;
+      _errorMessage = null;
     });
+    try {
+      final ride = await api.createRide(
+        destination: destination,
+        hostName: widget.hostName,
+      );
+      if (!mounted) return;
+      setState(() {
+        _createdRide = ride;
+        _joinCode = ride.joinCode;
+        _isLoading = false;
+      });
+    } on RideApiException catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _errorMessage = error.message;
+        _isLoading = false;
+      });
+    }
   }
 
   void _onStartRideTapped() {
     // Return the created ride to MainScreen so it opens on the Map tab.
     Navigator.of(context).pop(
-      ActiveRide(
-        joinCode: _joinCode!,
-        destination: _destinationController.text.trim(),
-        isHost: true,
-      ),
+      _createdRide ??
+          ActiveRide(
+            joinCode: _joinCode!,
+            destination: _destinationController.text.trim(),
+            isHost: true,
+            currentUserName: widget.hostName,
+          ),
     );
   }
 
@@ -87,10 +127,20 @@ class _HostRideScreenState extends State<HostRideScreen> {
             const SizedBox(height: 20),
 
             FilledButton.icon(
-              onPressed: _onGenerateTapped,
-              icon: const Icon(Icons.vpn_key_outlined),
-              label: const Text('Generate Join Code'),
+              onPressed: _isLoading ? null : _onGenerateTapped,
+              icon: _isLoading
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.vpn_key_outlined),
+              label: Text(_isLoading ? 'Creating…' : 'Generate Join Code'),
             ),
+            if (_errorMessage != null) ...[
+              const SizedBox(height: 12),
+              Text(_errorMessage!, style: TextStyle(color: colors.error)),
+            ],
             const SizedBox(height: 24),
 
             // `if` inside a list: the widget is only added when the condition
