@@ -5,6 +5,7 @@ import 'package:latlong2/latlong.dart';
 import 'package:ridesync/models/active_ride.dart';
 import 'package:ridesync/services/map_search_service.dart';
 import 'package:ridesync/services/ride_api_service.dart';
+import 'package:ridesync/utils/ride_share.dart';
 
 class HostRideScreen extends StatefulWidget {
   const HostRideScreen({
@@ -15,6 +16,7 @@ class HostRideScreen extends StatefulWidget {
     this.initialPlace,
     this.initialRoute,
     this.nearPoint,
+    this.onShareOverride,
   });
 
   final RideApiService? apiService;
@@ -23,6 +25,7 @@ class HostRideScreen extends StatefulWidget {
   final PlaceResult? initialPlace;
   final RoutePreview? initialRoute;
   final LatLng? nearPoint;
+  final RideShareHandler? onShareOverride;
 
   @override
   State<HostRideScreen> createState() => _HostRideScreenState();
@@ -43,6 +46,8 @@ class _HostRideScreenState extends State<HostRideScreen> {
   ActiveRide? _createdRide;
   String? _errorMessage;
   bool _isLoading = false;
+  bool _copiedRecently = false;
+  Timer? _copiedResetTimer;
 
   void _onDestinationChanged(String value) {
     // Editing text clears the previously selected pin until a new suggestion is picked.
@@ -163,9 +168,39 @@ class _HostRideScreenState extends State<HostRideScreen> {
     );
   }
 
+  Future<void> _onCopyCodeTapped() async {
+    final code = _joinCode;
+    if (code == null) return;
+    await copyRideCode(context, code);
+    if (!mounted) return;
+    _copiedResetTimer?.cancel();
+    setState(() {
+      _copiedRecently = true;
+    });
+    _copiedResetTimer = Timer(const Duration(seconds: 2), () {
+      if (!mounted) return;
+      setState(() {
+        _copiedRecently = false;
+      });
+    });
+  }
+
+  Future<void> _onShareRideTapped() async {
+    final code = _joinCode;
+    if (code == null) return;
+    final destination =
+        _createdRide?.destination ?? _destinationController.text.trim();
+    await shareRideInvite(
+      code: code,
+      destination: destination,
+      onShareOverride: widget.onShareOverride,
+    );
+  }
+
   @override
   void dispose() {
     _searchDebounce?.cancel();
+    _copiedResetTimer?.cancel();
     _destinationController.dispose();
     super.dispose();
   }
@@ -300,13 +335,50 @@ class _HostRideScreenState extends State<HostRideScreen> {
                         style: text.bodyMedium,
                       ),
                       const SizedBox(height: 12),
-                      Text(
-                        _joinCode!,
-                        style: text.displaySmall?.copyWith(
-                          fontWeight: FontWeight.w900,
-                          letterSpacing: 8,
-                          color: colors.onPrimaryContainer,
+                      InkWell(
+                        borderRadius: BorderRadius.circular(12),
+                        onTap: _onCopyCodeTapped,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 4,
+                          ),
+                          child: Text(
+                            _joinCode!,
+                            style: text.displaySmall?.copyWith(
+                              fontWeight: FontWeight.w900,
+                              letterSpacing: 8,
+                              color: colors.onPrimaryContainer,
+                            ),
+                          ),
                         ),
+                      ),
+                      const SizedBox(height: 16),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: _onCopyCodeTapped,
+                              icon: Icon(
+                                _copiedRecently
+                                    ? Icons.check_rounded
+                                    : Icons.copy_rounded,
+                                size: 18,
+                              ),
+                              label: Text(
+                                _copiedRecently ? 'Copied' : 'Copy code',
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: FilledButton.tonalIcon(
+                              onPressed: _onShareRideTapped,
+                              icon: const Icon(Icons.share_rounded, size: 18),
+                              label: const Text('Share ride'),
+                            ),
+                          ),
+                        ],
                       ),
                     ],
                   ),

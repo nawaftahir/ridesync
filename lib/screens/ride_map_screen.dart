@@ -10,6 +10,7 @@ import 'package:ridesync/screens/convoy_screen.dart';
 import 'package:ridesync/services/location_service.dart';
 import 'package:ridesync/services/map_search_service.dart';
 import 'package:ridesync/services/ride_api_service.dart';
+import 'package:ridesync/utils/ride_share.dart';
 import 'package:ridesync/widgets/open_free_map_layer.dart';
 import 'package:ridesync/widgets/place_search_sheet.dart';
 
@@ -28,6 +29,7 @@ class RideMapScreen extends StatefulWidget {
     this.apiService,
     this.searchService,
     this.onRidersUpdated,
+    this.onShareOverride,
   });
 
   final ActiveRide? activeRide;
@@ -40,6 +42,7 @@ class RideMapScreen extends StatefulWidget {
   final RideApiService? apiService;
   final MapSearchService? searchService;
   final ValueChanged<List<RiderPosition>>? onRidersUpdated;
+  final RideShareHandler? onShareOverride;
 
   @override
   State<RideMapScreen> createState() => _RideMapScreenState();
@@ -835,6 +838,16 @@ class _RideMapScreenState extends State<RideMapScreen>
                   previewPlace: _previewPlace,
                   onTapSearch: _openPlaceSearch,
                   onClearPreview: _clearPreview,
+                  onCopyCode: ride == null
+                      ? null
+                      : () => copyRideCode(context, ride.joinCode),
+                  onShareRide: ride == null
+                      ? null
+                      : () => shareRideInvite(
+                          code: ride.joinCode,
+                          destination: ride.destination,
+                          onShareOverride: widget.onShareOverride,
+                        ),
                 ),
                 if (_isPickingOnMap && ride == null) ...[
                   const SizedBox(height: 8),
@@ -1157,12 +1170,16 @@ class _MapTopCard extends StatelessWidget {
     required this.previewPlace,
     required this.onTapSearch,
     required this.onClearPreview,
+    this.onCopyCode,
+    this.onShareRide,
   });
 
   final ActiveRide? activeRide;
   final PlaceResult? previewPlace;
   final VoidCallback onTapSearch;
   final VoidCallback onClearPreview;
+  final VoidCallback? onCopyCode;
+  final VoidCallback? onShareRide;
 
   @override
   Widget build(BuildContext context) {
@@ -1220,24 +1237,48 @@ class _MapTopCard extends StatelessWidget {
                   ),
                 if (ride != null) ...[
                   const SizedBox(width: 8),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 4,
-                    ),
-                    decoration: BoxDecoration(
-                      color: colors.primaryContainer,
+                  Tooltip(
+                    message: 'Copy ride code',
+                    child: InkWell(
                       borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Text(
-                      ride.joinCode,
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: 0.6,
-                        color: colors.onPrimaryContainer,
+                      onTap: onCopyCode,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: colors.primaryContainer,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              ride.joinCode,
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: 0.6,
+                                color: colors.onPrimaryContainer,
+                              ),
+                            ),
+                            const SizedBox(width: 4),
+                            Icon(
+                              Icons.copy_rounded,
+                              size: 13,
+                              color: colors.onPrimaryContainer,
+                            ),
+                          ],
+                        ),
                       ),
                     ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.share_outlined, size: 19),
+                    tooltip: 'Share ride code',
+                    visualDensity: VisualDensity.compact,
+                    onPressed: onShareRide,
                   ),
                 ],
               ],
