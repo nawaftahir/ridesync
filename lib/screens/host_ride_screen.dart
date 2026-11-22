@@ -297,6 +297,18 @@ class _HostRideScreenState extends State<HostRideScreen> {
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                               ),
+                        trailing: widget.nearPoint == null
+                            ? null
+                            : Text(
+                                formatPlaceDistance(
+                                  widget.nearPoint!,
+                                  _suggestions[i].point,
+                                ),
+                                style: text.bodySmall?.copyWith(
+                                  color: colors.onSurfaceVariant,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
                         onTap: () => _pickSuggestion(_suggestions[i]),
                       ),
                     ],

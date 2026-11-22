@@ -297,4 +297,152 @@ void main() {
       expect(find.text('9.1 km'), findsOneWidget);
     },
   );
+
+  test('MapSearchService falls back to Nominatim when Photon returns empty and formats distances', () async {
+    final client = MockClient((request) async {
+      if (request.url.host == 'photon.komoot.io') {
+        return http.Response(jsonEncode({'features': const []}), 200);
+      }
+      if (request.url.host == 'nominatim.openstreetmap.org') {
+        return http.Response(
+          jsonEncode([
+            {
+              'lat': '33.7294',
+              'lon': '73.0931',
+              'name': 'F-7 Markaz',
+              'display_name': 'F-7 Markaz, Islamabad, Pakistan',
+              'category': 'amenity',
+              'type': 'cafe',
+              'address': {'city': 'Islamabad', 'country': 'Pakistan'},
+            },
+          ]),
+          200,
+        );
+      }
+      return http.Response('Not found', 404);
+    });
+
+    final search = MapSearchService(client: client);
+    final outcome = await search.searchPlacesOutcome(
+      'F-7 Markaz',
+      near: const LatLng(33.7215, 73.0433),
+    );
+    expect(outcome.hasError, isFalse);
+    expect(outcome.usedFallback, isTrue);
+    expect(outcome.results, hasLength(1));
+    expect(outcome.results.first.name, 'F-7 Markaz');
+    expect(outcome.results.first.category, 'cafe');
+
+    expect(
+      formatPlaceDistance(
+        const LatLng(33.7215, 73.0433),
+        const LatLng(33.7250, 73.0433),
+      ),
+      endsWith('m'),
+    );
+    expect(
+      formatPlaceDistance(
+        const LatLng(33.7215, 73.0433),
+        const LatLng(33.7415, 73.0533),
+      ),
+      endsWith('km'),
+    );
+  });
+
+  testWidgets(
+    'Category chip opens search with distance badge, saves recent place, and shows offline retry',
+    (tester) async {
+      var offline = false;
+      final searchClient = MockClient((request) async {
+        if (offline) return http.Response('Offline', 503);
+        if (request.url.host == 'photon.komoot.io') {
+          return http.Response(
+            jsonEncode({
+              'features': [
+                {
+                  'geometry': {
+                    'coordinates': [73.0558, 33.7394],
+                  },
+                  'properties': {
+                    'name': 'PSO Fuel Station',
+                    'city': 'Islamabad',
+                    'osm_key': 'amenity',
+                    'osm_value': 'fuel',
+                  },
+                },
+              ],
+            }),
+            200,
+          );
+        }
+        if (request.url.host == 'router.project-osrm.org') {
+          return http.Response(
+            jsonEncode({
+              'routes': [
+                {
+                  'distance': 2400,
+                  'duration': 300,
+                  'geometry': {
+                    'coordinates': [
+                      [73.0433, 33.7215],
+                      [73.0558, 33.7394],
+                    ],
+                  },
+                },
+              ],
+            }),
+            200,
+          );
+        }
+        return http.Response('Not found', 404);
+      });
+
+      final search = MapSearchService(client: searchClient);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.light,
+          home: MainScreen(
+            mapSearchService: search,
+            locationService: const _IdleLocationService(),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Tap floating "Fuel" pill directly on the Map screen.
+      expect(find.text('Fuel'), findsOneWidget);
+      await tester.tap(find.text('Fuel'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('PSO Fuel Station'), findsOneWidget);
+      expect(find.text('2.3 km'), findsOneWidget);
+
+      // Select it -> saves to Recent searches and previews route on the map.
+      await tester.tap(find.text('PSO Fuel Station'));
+      await tester.pumpAndSettle();
+      expect(find.text('Host Ride Here'), findsOneWidget);
+
+      // Close preview and re-open search -> Recent section shows PSO Fuel Station.
+      await tester.tap(find.byTooltip('Close preview'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Where are you riding?'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Recent'), findsOneWidget);
+      expect(find.text('PSO Fuel Station'), findsOneWidget);
+
+      // Clear recent searches.
+      await tester.tap(find.text('Clear'));
+      await tester.pumpAndSettle();
+      expect(find.text('Recent'), findsNothing);
+
+      // Offline search displays Retry state cleanly.
+      offline = true;
+      await tester.enterText(find.byType(TextField), 'Murree');
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pumpAndSettle();
+      expect(find.text('Retry'), findsOneWidget);
+    },
+  );
 }

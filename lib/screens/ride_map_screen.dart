@@ -489,7 +489,7 @@ class _RideMapScreenState extends State<RideMapScreen>
     );
   }
 
-  Future<void> _openPlaceSearch() async {
+  Future<void> _openPlaceSearch({SearchCategory? initialCategory}) async {
     final search = widget.searchService;
     if (search == null) {
       widget.onHostRide();
@@ -507,7 +507,10 @@ class _RideMapScreenState extends State<RideMapScreen>
       builder: (_) => PlaceSearchSheet(
         searchService: search,
         nearPoint: near,
-        initialQuery: _previewPlace?.name ?? '',
+        initialQuery: initialCategory == null
+            ? (_previewPlace?.name ?? '')
+            : '',
+        initialCategory: initialCategory,
       ),
     );
     if (!mounted || action == null) return;
@@ -1020,6 +1023,16 @@ class _RideMapScreenState extends State<RideMapScreen>
                             onShareOverride: widget.onShareOverride,
                           ),
                   ),
+                  if (ride == null &&
+                      _previewPlace == null &&
+                      !_isPickingOnMap &&
+                      widget.searchService != null) ...[
+                    const SizedBox(height: 8),
+                    _MapCategoryChipBar(
+                      onSelected: (category) =>
+                          _openPlaceSearch(initialCategory: category),
+                    ),
+                  ],
                   if (_isPickingOnMap && ride == null) ...[
                     const SizedBox(height: 8),
                     _PickOnMapBanner(
@@ -1167,6 +1180,60 @@ class _RideMapScreenState extends State<RideMapScreen>
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+// Floating Google Maps-style category pill strip below the map search bar.
+class _MapCategoryChipBar extends StatelessWidget {
+  const _MapCategoryChipBar({required this.onSelected});
+
+  final ValueChanged<SearchCategory> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return SizedBox(
+      height: 36,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        itemCount: kRiderSearchCategories.length,
+        separatorBuilder: (_, _) => const SizedBox(width: 8),
+        itemBuilder: (context, index) {
+          final category = kRiderSearchCategories[index];
+          return Material(
+            color: colors.surfaceContainerLow,
+            elevation: 2,
+            shadowColor: Colors.black.withValues(alpha: 0.16),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(18),
+              side: BorderSide(color: colors.outlineVariant),
+            ),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(18),
+              onTap: () => onSelected(category),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(category.icon, size: 16, color: colors.primary),
+                    const SizedBox(width: 6),
+                    Text(
+                      category.label,
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: colors.onSurface,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
       ),
     );
   }
