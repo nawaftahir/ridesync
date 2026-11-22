@@ -1,9 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ridesync/main.dart';
+import 'package:ridesync/screens/main_screen.dart';
+import 'package:ridesync/theme/app_theme.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
-  testWidgets('MainScreen renders map layout, bottom sheet, and tabs', (
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+  });
+
+  testWidgets('RideSyncApp starts on clean live map with 4 tabs', (
     tester,
   ) async {
     await tester.pumpWidget(const RideSyncApp());
@@ -15,24 +22,13 @@ void main() {
     expect(find.text('Group'), findsOneWidget);
     expect(find.text('Profile'), findsOneWidget);
 
-    // Map tab starts with the mock active ride layout and bottom sheet.
-    expect(find.text('MOTO89'), findsOneWidget);
-    expect(find.text('Daman-e-Koh, Islamabad'), findsNWidgets(2));
-    expect(find.text('Group ride'), findsOneWidget);
-    expect(find.text('Live sync'), findsOneWidget);
-    expect(find.text('PICKUP'), findsOneWidget);
-    expect(find.text('DESTINATION'), findsOneWidget);
-    expect(find.text('End Ride'), findsOneWidget);
+    // Live default mode starts on a clean idle map (no fake MOTO89 ride).
+    expect(find.text('Where are you riding?'), findsOneWidget);
+    expect(find.text('Ready to ride'), findsOneWidget);
+    expect(find.text('Idle'), findsOneWidget);
+    expect(find.text('Host a ride'), findsOneWidget);
+    expect(find.text('Join code'), findsOneWidget);
     expect(find.byTooltip('Recenter map'), findsOneWidget);
-
-    // Tapping the sheet header collapses and re-expands the bottom sheet.
-    await tester.tap(find.text('Group ride'));
-    await tester.pump();
-    expect(find.text('PICKUP'), findsNothing);
-
-    await tester.tap(find.text('Group ride'));
-    await tester.pump();
-    expect(find.text('PICKUP'), findsOneWidget);
 
     // Switch to Rides tab and check actions & past rides.
     await tester.tap(find.text('Rides'));
@@ -46,18 +42,44 @@ void main() {
     await tester.pump();
     expect(find.text('Work in progress'), findsOneWidget);
 
-    // Switch to Profile tab and check profile & login link.
+    // Switch to Profile tab and check profile, live server URL, & login link.
     await tester.tap(find.text('Profile'));
     await tester.pump();
     expect(find.text('Nawaf'), findsOneWidget);
     expect(find.text('Sign up or log in'), findsOneWidget);
+    await tester.drag(find.byType(ListView), const Offset(0, -300));
+    await tester.pumpAndSettle();
+    expect(find.text('https://ridesync.ddns.net'), findsOneWidget);
   });
 
-  testWidgets('Ending a ride shows idle map and joining returns to Map tab', (
+  testWidgets('Offline demo mode renders mock ride, collapse, end, and join', (
     tester,
   ) async {
-    await tester.pumpWidget(const RideSyncApp());
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: const MainScreen(initialServerUrl: ''),
+      ),
+    );
     await tester.pump();
+
+    // Offline preview starts with the mock active ride layout and bottom sheet.
+    expect(find.text('MOTO89'), findsOneWidget);
+    expect(find.text('Daman-e-Koh, Islamabad'), findsNWidgets(2));
+    expect(find.text('Group ride'), findsOneWidget);
+    expect(find.text('Live sync'), findsOneWidget);
+    expect(find.text('PICKUP'), findsOneWidget);
+    expect(find.text('DESTINATION'), findsOneWidget);
+    expect(find.text('End Ride'), findsOneWidget);
+
+    // Tapping the sheet header collapses and re-expands the bottom sheet.
+    await tester.tap(find.text('Group ride'));
+    await tester.pump();
+    expect(find.text('PICKUP'), findsNothing);
+
+    await tester.tap(find.text('Group ride'));
+    await tester.pump();
+    expect(find.text('PICKUP'), findsOneWidget);
 
     // End the default mock ride on the Map tab.
     await tester.tap(find.text('End Ride'));

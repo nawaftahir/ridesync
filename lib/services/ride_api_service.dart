@@ -30,12 +30,16 @@ class RidePositionsSnapshot {
   const RidePositionsSnapshot({
     required this.code,
     required this.destination,
+    this.destLat,
+    this.destLng,
     required this.isEnded,
     required this.riders,
   });
 
   final String code;
   final String destination;
+  final double? destLat;
+  final double? destLng;
   final bool isEnded;
   final List<RiderPosition> riders;
 }
@@ -139,10 +143,16 @@ class RideApiService {
   Future<ActiveRide> createRide({
     required String destination,
     required String hostName,
+    double? destLat,
+    double? destLng,
+    double? distanceKm,
+    int? durationMinutes,
     int? hostId,
   }) async {
     final body = <String, dynamic>{
       'destination': destination.trim(),
+      'dest_lat': ?destLat,
+      'dest_lng': ?destLng,
       'host_name': hostName.trim().isEmpty ? 'Rider' : hostName.trim(),
       'host_id': ?hostId,
     };
@@ -160,6 +170,10 @@ class RideApiService {
     return ActiveRide(
       joinCode: data['code'] as String,
       destination: data['destination'] as String,
+      destLat: (data['dest_lat'] as num?)?.toDouble() ?? destLat,
+      destLng: (data['dest_lng'] as num?)?.toDouble() ?? destLng,
+      distanceKm: distanceKm,
+      durationMinutes: durationMinutes,
       isHost: true,
       currentUserId: (data['host_id'] as num).toInt(),
       currentUserName: (data['host_name'] as String?) ?? hostName,
@@ -190,6 +204,8 @@ class RideApiService {
     return ActiveRide(
       joinCode: data['code'] as String,
       destination: data['destination'] as String,
+      destLat: (data['dest_lat'] as num?)?.toDouble(),
+      destLng: (data['dest_lng'] as num?)?.toDouble(),
       isHost: (data['is_host'] as bool?) ?? false,
       currentUserId: (data['user_id'] as num).toInt(),
       currentUserName: (data['name'] as String?) ?? riderName,
@@ -257,6 +273,8 @@ class RideApiService {
     return RidePositionsSnapshot(
       code: (data['code'] as String?) ?? cleanCode,
       destination: (data['destination'] as String?) ?? '',
+      destLat: (data['dest_lat'] as num?)?.toDouble(),
+      destLng: (data['dest_lng'] as num?)?.toDouble(),
       isEnded: (data['is_ended'] as bool?) ?? false,
       riders: riders,
     );

@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-11-22
+- Added Google Maps-style place search (`Photon` / OSM autocomplete), tap/long-press to drop a destination pin with reverse geocoding, live road routing (`OSRM` polyline, distance, ETA + straight-line fallback), and a pre-host route preview card on `RideMapScreen` + destination autocomplete inside `HostRideScreen`.
+- Added `dest_lat` and `dest_lng` columns to MariaDB `rides` (`backend/sql/schema.sql`, `backend/app/db.py`, `backend/app/main.py`, `backend/app/schemas.py`) so every joined rider shares the real destination pin and road route, plus a one-command `backend/deploy.bat` targeting `/srv/ridesync`.
+- Saved backend Server URL and editable rider display name locally with `shared_preferences`, defaulting to the live HTTPS server (`https://ridesync.ddns.net`) on a clean GPS map instead of a startup mock ride (with Offline demo kept as a Profile toggle).
+
 ## 2026-11-18
 - Added the FastAPI + MariaDB [backend](backend/README.md) (`users`, `rides`, `ride_members`, `positions` schema, REST endpoints for creating/joining/syncing/ending rides, `init_db.py`, Windows `start.bat` launcher, and `pytest` coverage).
 - Wired `HostRideScreen`, `JoinRideScreen`, `RideMapScreen`, `MainScreen`, and `ProfileScreen` to the backend via `RideApiService` (with live 2s GPS upload / 3s convoy polling, host end-ride notifications, in-app Server URL presets + `/health` tester, offline mock preview fallback, Android debug cleartext HTTP support, and `test/ride_api_service_test.dart`).

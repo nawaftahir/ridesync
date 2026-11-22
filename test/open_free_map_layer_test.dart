@@ -8,6 +8,7 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:ridesync/main.dart';
+import 'package:ridesync/screens/main_screen.dart';
 import 'package:ridesync/widgets/open_free_map_layer.dart';
 import 'package:vector_map_tiles/vector_map_tiles.dart';
 
@@ -347,7 +348,9 @@ void main() {
         tester.view.resetDevicePixelRatio();
       });
 
-      await tester.pumpWidget(const RideSyncApp());
+      await tester.pumpWidget(
+        const MaterialApp(home: MainScreen(initialServerUrl: '')),
+      );
       await tester.pumpAndSettle();
 
       final chip = find.text('© OpenFreeMap · OSM');
@@ -395,7 +398,9 @@ void main() {
   testWidgets(
     'RideMapScreen bottom sheet supports vertical swipe to collapse and expand',
     (tester) async {
-      await tester.pumpWidget(const RideSyncApp());
+      await tester.pumpWidget(
+        const MaterialApp(home: MainScreen(initialServerUrl: '')),
+      );
       await tester.pumpAndSettle();
 
       expect(find.text('PICKUP'), findsOneWidget);

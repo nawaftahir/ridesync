@@ -1,31 +1,51 @@
+import 'dart:async';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
+import 'package:latlong2/latlong.dart';
 import 'package:ridesync/models/active_ride.dart';
+import 'package:ridesync/services/map_search_service.dart';
 import 'package:ridesync/services/ride_api_service.dart';
 
 class HostRideScreen extends StatefulWidget {
-  const HostRideScreen({super.key, this.apiService, this.hostName = 'Nawaf'});
+  const HostRideScreen({
+    super.key,
+    this.apiService,
+    this.searchService,
+    this.hostName = 'Nawaf',
+    this.initialPlace,
+    this.initialRoute,
+    this.nearPoint,
+  });
 
   final RideApiService? apiService;
+  final MapSearchService? searchService;
   final String hostName;
+  final PlaceResult? initialPlace;
+  final RoutePreview? initialRoute;
+  final LatLng? nearPoint;
 
   @override
   State<HostRideScreen> createState() => _HostRideScreenState();
 }
 
 class _HostRideScreenState extends State<HostRideScreen> {
-  // Reads whatever is typed in the destination field.
-  final _destinationController = TextEditingController();
+  late final TextEditingController _destinationController =
+      TextEditingController(text: widget.initialPlace?.displayName ?? '');
 
-  // The generated code. null = not generated yet → code card is hidden.
+  late PlaceResult? _selectedPlace = widget.initialPlace;
+  Timer? _searchDebounce;
+  int _searchRequestId = 0;
+  bool _isSearching = false;
+  List<PlaceResult> _suggestions = const [];
+
+  // The generated code. null = not generated yet -> code card is hidden.
   String? _joinCode;
   ActiveRide? _createdRide;
   String? _errorMessage;
   bool _isLoading = false;
 
   // Builds a random 6-letter uppercase code, e.g. "KXMQTB" (offline mode only).
-  // ASCII 65 = 'A', so 65 + 0…25 gives A…Z.
   String _generateCode() {
     final random = Random();
     String code = '';
@@ -33,6 +53,58 @@ class _HostRideScreenState extends State<HostRideScreen> {
       code += String.fromCharCode(65 + random.nextInt(26));
     }
     return code;
+  }
+
+  void _onDestinationChanged(String value) {
+    // Editing text clears the previously selected pin until a new suggestion is picked.
+    if (_selectedPlace != null &&
+        value.trim() != _selectedPlace!.displayName &&
+        value.trim() != _selectedPlace!.name) {
+      setState(() {
+        _selectedPlace = null;
+      });
+    }
+
+    final search = widget.searchService;
+    if (search == null) return;
+
+    _searchDebounce?.cancel();
+    final trimmed = value.trim();
+    if (trimmed.length < 2) {
+      _searchRequestId++;
+      setState(() {
+        _isSearching = false;
+        _suggestions = const [];
+      });
+      return;
+    }
+
+    setState(() {
+      _isSearching = true;
+    });
+    _searchDebounce = Timer(const Duration(milliseconds: 350), () async {
+      final reqId = ++_searchRequestId;
+      final results = await search.searchPlaces(
+        trimmed,
+        near: widget.nearPoint,
+      );
+      if (!mounted || reqId != _searchRequestId) return;
+      setState(() {
+        _suggestions = results;
+        _isSearching = false;
+      });
+    });
+  }
+
+  void _pickSuggestion(PlaceResult place) {
+    _searchDebounce?.cancel();
+    _searchRequestId++;
+    _destinationController.text = place.displayName;
+    setState(() {
+      _selectedPlace = place;
+      _suggestions = const [];
+      _isSearching = false;
+    });
   }
 
   Future<void> _onGenerateTapped() async {
@@ -44,13 +116,29 @@ class _HostRideScreenState extends State<HostRideScreen> {
       return;
     }
 
+    final point = _selectedPlace?.point;
+    final matchedInitialRoute =
+        widget.initialPlace != null &&
+            _selectedPlace?.point == widget.initialPlace!.point
+        ? widget.initialRoute
+        : null;
+
     final api = widget.apiService;
     if (api == null || !api.isEnabled) {
       // Offline mock-preview mode.
       setState(() {
         _errorMessage = null;
-        _createdRide = null;
-        _joinCode = _generateCode();
+        _createdRide = ActiveRide(
+          joinCode: _generateCode(),
+          destination: destination,
+          destLat: point?.latitude,
+          destLng: point?.longitude,
+          distanceKm: matchedInitialRoute?.distanceKm,
+          durationMinutes: matchedInitialRoute?.durationMinutes,
+          isHost: true,
+          currentUserName: widget.hostName,
+        );
+        _joinCode = _createdRide!.joinCode;
       });
       return;
     }
@@ -58,10 +146,15 @@ class _HostRideScreenState extends State<HostRideScreen> {
     setState(() {
       _isLoading = true;
       _errorMessage = null;
+      _suggestions = const [];
     });
     try {
       final ride = await api.createRide(
         destination: destination,
+        destLat: point?.latitude,
+        destLng: point?.longitude,
+        distanceKm: matchedInitialRoute?.distanceKm,
+        durationMinutes: matchedInitialRoute?.durationMinutes,
         hostName: widget.hostName,
       );
       if (!mounted) return;
@@ -80,12 +173,13 @@ class _HostRideScreenState extends State<HostRideScreen> {
   }
 
   void _onStartRideTapped() {
-    // Return the created ride to MainScreen so it opens on the Map tab.
     Navigator.of(context).pop(
       _createdRide ??
           ActiveRide(
             joinCode: _joinCode!,
             destination: _destinationController.text.trim(),
+            destLat: _selectedPlace?.point.latitude,
+            destLng: _selectedPlace?.point.longitude,
             isHost: true,
             currentUserName: widget.hostName,
           ),
@@ -94,7 +188,7 @@ class _HostRideScreenState extends State<HostRideScreen> {
 
   @override
   void dispose() {
-    // Always dispose controllers to free memory when the screen closes.
+    _searchDebounce?.cancel();
     _destinationController.dispose();
     super.dispose();
   }
@@ -106,7 +200,6 @@ class _HostRideScreenState extends State<HostRideScreen> {
 
     return Scaffold(
       appBar: AppBar(title: const Text('Host a Ride')),
-      // SingleChildScrollView prevents overflow when the keyboard opens.
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
         child: Column(
@@ -118,12 +211,87 @@ class _HostRideScreenState extends State<HostRideScreen> {
             TextField(
               controller: _destinationController,
               textCapitalization: TextCapitalization.words,
-              decoration: const InputDecoration(
-                hintText: 'e.g. Daman-e-Koh, Islamabad',
-                prefixIcon: Icon(Icons.location_on_outlined),
-                border: OutlineInputBorder(),
+              onChanged: _onDestinationChanged,
+              decoration: InputDecoration(
+                hintText: 'Search a place, road, or landmark',
+                prefixIcon: const Icon(Icons.location_on_outlined),
+                suffixIcon: _isSearching
+                    ? const Padding(
+                        padding: EdgeInsets.all(12),
+                        child: SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      )
+                    : (_destinationController.text.isEmpty
+                          ? null
+                          : IconButton(
+                              icon: const Icon(Icons.close),
+                              onPressed: () {
+                                _destinationController.clear();
+                                _onDestinationChanged('');
+                              },
+                            )),
+                border: const OutlineInputBorder(),
               ),
             ),
+
+            if (_selectedPlace != null) ...[
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Icon(Icons.check_circle, size: 16, color: colors.primary),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      'Map pin set (${_selectedPlace!.point.latitude.toStringAsFixed(4)}, '
+                      '${_selectedPlace!.point.longitude.toStringAsFixed(4)})',
+                      style: text.bodySmall?.copyWith(
+                        color: colors.primary,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+
+            if (_suggestions.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Card(
+                margin: EdgeInsets.zero,
+                child: Column(
+                  children: [
+                    for (int i = 0; i < _suggestions.length; i++) ...[
+                      if (i > 0) const Divider(height: 1),
+                      ListTile(
+                        dense: true,
+                        leading: Icon(
+                          Icons.location_on_outlined,
+                          color: colors.primary,
+                        ),
+                        title: Text(
+                          _suggestions[i].name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                        subtitle: _suggestions[i].subtitle.isEmpty
+                            ? null
+                            : Text(
+                                _suggestions[i].subtitle,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                        onTap: () => _pickSuggestion(_suggestions[i]),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+
             const SizedBox(height: 20),
 
             FilledButton.icon(
@@ -143,9 +311,6 @@ class _HostRideScreenState extends State<HostRideScreen> {
             ],
             const SizedBox(height: 24),
 
-            // `if` inside a list: the widget is only added when the condition
-            // is true. Here, the code card and Start button appear only after
-            // a code is generated.
             if (_joinCode != null)
               Card(
                 color: colors.primaryContainer,

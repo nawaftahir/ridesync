@@ -12,6 +12,7 @@ import 'package:ridesync/screens/main_screen.dart';
 import 'package:ridesync/services/location_service.dart';
 import 'package:ridesync/services/ride_api_service.dart';
 import 'package:ridesync/theme/app_theme.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class _FakeLocationService extends LocationService {
   _FakeLocationService(this.stream);
@@ -469,9 +470,11 @@ void main() {
     expect(find.text('Ready to ride'), findsOneWidget);
   });
 
-  testWidgets('Profile Backend server dialog updates server URL preset', (
+  testWidgets('Profile updates display name and server URL presets', (
     tester,
   ) async {
+    SharedPreferences.setMockInitialValues({});
+
     await tester.pumpWidget(
       MaterialApp(
         theme: AppTheme.light,
@@ -485,10 +488,19 @@ void main() {
     await tester.tap(find.text('Profile'));
     await tester.pumpAndSettle();
 
+    // Edit display name so multiple riders can distinguish each other.
+    await tester.tap(find.text('Nawaf'));
+    await tester.pumpAndSettle();
+    expect(find.text('Rider Display Name'), findsOneWidget);
+    await tester.enterText(find.byType(TextField), 'Bilal');
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+    expect(find.text('Bilal'), findsOneWidget);
+
     final serverTile = find.text('Backend server');
     await tester.drag(find.byType(ListView), const Offset(0, -300));
     await tester.pumpAndSettle();
-    expect(find.text('Offline preview (mock rides)'), findsOneWidget);
+    expect(find.text('https://ridesync.ddns.net'), findsOneWidget);
 
     await tester.tap(serverTile);
     await tester.pumpAndSettle();
@@ -501,7 +513,7 @@ void main() {
 
     expect(find.text('http://127.0.0.1:8000'), findsOneWidget);
 
-    // Switching back to Offline restores idle/mock mode cleanly.
+    // Switching to Offline enables local mock preview cleanly.
     await tester.tap(find.text('Backend server'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Offline'));

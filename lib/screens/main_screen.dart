@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:latlong2/latlong.dart';
 import 'package:ridesync/models/active_ride.dart';
 import 'package:ridesync/models/rider_position.dart';
 import 'package:ridesync/repositories/ride_repository.dart';
@@ -9,7 +10,9 @@ import 'package:ridesync/screens/join_ride_screen.dart';
 import 'package:ridesync/screens/profile_screen.dart';
 import 'package:ridesync/screens/ride_map_screen.dart';
 import 'package:ridesync/screens/rides_screen.dart';
+import 'package:ridesync/services/app_preferences.dart';
 import 'package:ridesync/services/location_service.dart';
+import 'package:ridesync/services/map_search_service.dart';
 import 'package:ridesync/services/ride_api_service.dart';
 
 // Main app shell holding the 4-tab bottom bar and the active ride state.
@@ -20,7 +23,8 @@ class MainScreen extends StatefulWidget {
     this.riderRepository = const RiderRepository(),
     this.locationService = const LocationService(),
     this.apiService,
-    this.initialServerUrl = const String.fromEnvironment('API_BASE_URL'),
+    this.mapSearchService,
+    this.initialServerUrl,
     this.themeMode = ThemeMode.system,
     this.onThemeModeChanged,
   });
@@ -29,7 +33,11 @@ class MainScreen extends StatefulWidget {
   final RiderRepository riderRepository;
   final LocationService locationService;
   final RideApiService? apiService;
-  final String initialServerUrl;
+  final MapSearchService? mapSearchService;
+
+  // Null means "use saved preference, or default live server (ridesync.ddns.net)".
+  // Pass '' explicitly in tests or offline mode to preview mock rides.
+  final String? initialServerUrl;
   final ThemeMode themeMode;
   final ValueChanged<ThemeMode>? onThemeModeChanged;
 
@@ -38,39 +46,88 @@ class MainScreen extends StatefulWidget {
 }
 
 class _MainScreenState extends State<MainScreen> {
-  static const String _defaultRiderName = 'Nawaf';
+  static const String _envServerUrl = String.fromEnvironment(
+    'API_BASE_URL',
+    defaultValue: AppPreferences.defaultLiveServerUrl,
+  );
+
+  final AppPreferences _prefs = AppPreferences();
 
   int _selectedIndex = 0;
   ActiveRide? _activeRide;
   List<RiderPosition> _liveRiders = const [];
+  String _riderName = AppPreferences.defaultRiderName;
   late String _serverUrl;
   RideApiService? _ownedApiService;
+  MapSearchService? _ownedSearchService;
 
   RideApiService get _apiService => widget.apiService ?? _ownedApiService!;
+  MapSearchService get _searchService =>
+      widget.mapSearchService ?? _ownedSearchService!;
 
   @override
   void initState() {
     super.initState();
-    _serverUrl = widget.apiService?.cleanBaseUrl ?? widget.initialServerUrl;
+    _serverUrl =
+        widget.apiService?.cleanBaseUrl ??
+        widget.initialServerUrl ??
+        _envServerUrl;
     if (widget.apiService == null) {
       _ownedApiService = RideApiService(baseUrl: _serverUrl);
     }
+    if (widget.mapSearchService == null) {
+      _ownedSearchService = MapSearchService();
+    }
 
-    // Start with a mock active ride only when no live backend URL is configured.
+    // Only pre-load the mock active ride when explicitly running in offline demo mode.
     if (!_apiService.isEnabled && widget.rideRepository.rides.isNotEmpty) {
       final sample = widget.rideRepository.rides.first;
       _activeRide = ActiveRide(
         joinCode: sample.code,
         destination: sample.destination,
         isHost: true,
+        pickupLabel: 'F-6, Islamabad',
         distanceKm: sample.distanceKm,
+        durationMinutes: 18,
       );
+    }
+
+    if (widget.apiService == null && widget.initialServerUrl == null) {
+      _loadSavedSettings();
+    }
+  }
+
+  Future<void> _loadSavedSettings() async {
+    try {
+      final savedUrl = await _prefs.loadServerUrl();
+      final savedName = await _prefs.loadRiderName();
+      if (!mounted) return;
+
+      var changed = false;
+      if (savedName != null &&
+          savedName.trim().isNotEmpty &&
+          savedName != _riderName) {
+        _riderName = savedName.trim();
+        changed = true;
+      }
+      if (savedUrl != null && savedUrl != _serverUrl) {
+        _ownedApiService?.dispose();
+        _ownedApiService = RideApiService(baseUrl: savedUrl);
+        _serverUrl = _ownedApiService!.cleanBaseUrl;
+        changed = true;
+      }
+      if (changed) {
+        setState(() {});
+      }
+    } catch (_) {
+      // Ignore storage errors on unsupported platforms / headless tests.
     }
   }
 
   @override
   void dispose() {
     _ownedApiService?.dispose();
+    _ownedSearchService?.dispose();
     super.dispose();
   }
 
@@ -84,6 +141,16 @@ class _MainScreenState extends State<MainScreen> {
       _activeRide = null;
       _liveRiders = const [];
     });
+    _prefs.saveServerUrl(_serverUrl).catchError((_) {});
+  }
+
+  void _updateRiderName(String rawName) {
+    final clean = rawName.trim();
+    if (clean.isEmpty || clean == _riderName) return;
+    setState(() {
+      _riderName = clean;
+    });
+    _prefs.saveRiderName(clean).catchError((_) {});
   }
 
   // Opens HostRideScreen or JoinRideScreen and switches to Map when a ride starts.
@@ -96,6 +163,23 @@ class _MainScreenState extends State<MainScreen> {
       _liveRiders = const [];
       _selectedIndex = 0;
     });
+  }
+
+  Future<void> _openHostRide({
+    PlaceResult? initialPlace,
+    RoutePreview? initialRoute,
+    LatLng? nearPoint,
+  }) {
+    return _openRideFlow(
+      HostRideScreen(
+        apiService: _apiService,
+        searchService: _searchService,
+        hostName: _riderName,
+        initialPlace: initialPlace,
+        initialRoute: initialRoute,
+        nearPoint: nearPoint,
+      ),
+    );
   }
 
   void _endRide() {
@@ -137,7 +221,9 @@ class _MainScreenState extends State<MainScreen> {
     final groupRiders =
         (_apiService.isEnabled && _activeRide?.currentUserId != null)
         ? _liveRiders
-        : widget.riderRepository.positions;
+        : (_apiService.isEnabled
+              ? const <RiderPosition>[]
+              : widget.riderRepository.positions);
 
     return Scaffold(
       // IndexedStack keeps each tab alive when switching (so the map keeps its position).
@@ -147,21 +233,19 @@ class _MainScreenState extends State<MainScreen> {
           RideMapScreen(
             activeRide: _activeRide,
             onEndRide: _endRide,
-            onHostRide: () => _openRideFlow(
-              HostRideScreen(
-                apiService: _apiService,
-                hostName: _defaultRiderName,
-              ),
+            onHostRide: () => _openHostRide(),
+            onHostRideWithPlace: (place, route, nearPoint) => _openHostRide(
+              initialPlace: place,
+              initialRoute: route,
+              nearPoint: nearPoint,
             ),
             onJoinRide: () => _openRideFlow(
-              JoinRideScreen(
-                apiService: _apiService,
-                riderName: _defaultRiderName,
-              ),
+              JoinRideScreen(apiService: _apiService, riderName: _riderName),
             ),
             riderRepository: widget.riderRepository,
             locationService: widget.locationService,
             apiService: _apiService,
+            searchService: _searchService,
             onRidersUpdated: (riders) {
               if (!mounted) return;
               setState(() {
@@ -172,17 +256,9 @@ class _MainScreenState extends State<MainScreen> {
           RidesScreen(
             activeRide: _activeRide,
             onOpenMap: () => setState(() => _selectedIndex = 0),
-            onHostRide: () => _openRideFlow(
-              HostRideScreen(
-                apiService: _apiService,
-                hostName: _defaultRiderName,
-              ),
-            ),
+            onHostRide: () => _openHostRide(),
             onJoinRide: () => _openRideFlow(
-              JoinRideScreen(
-                apiService: _apiService,
-                riderName: _defaultRiderName,
-              ),
+              JoinRideScreen(apiService: _apiService, riderName: _riderName),
             ),
             rideRepository: widget.rideRepository,
           ),
@@ -191,6 +267,8 @@ class _MainScreenState extends State<MainScreen> {
             rideRepository: widget.rideRepository,
             themeMode: widget.themeMode,
             onThemeModeChanged: widget.onThemeModeChanged,
+            riderName: _riderName,
+            onRiderNameChanged: _updateRiderName,
             serverUrl: _serverUrl,
             onServerUrlChanged: widget.apiService == null
                 ? _updateServerUrl

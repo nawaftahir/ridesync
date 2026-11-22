@@ -10,8 +10,10 @@ import 'package:ridesync/models/rider_position.dart';
 import 'package:ridesync/repositories/rider_repository.dart';
 import 'package:ridesync/screens/convoy_screen.dart';
 import 'package:ridesync/services/location_service.dart';
+import 'package:ridesync/services/map_search_service.dart';
 import 'package:ridesync/services/ride_api_service.dart';
 import 'package:ridesync/widgets/open_free_map_layer.dart';
+import 'package:ridesync/widgets/place_search_sheet.dart';
 
 class RideMapScreen extends StatefulWidget {
   const RideMapScreen({
@@ -20,9 +22,11 @@ class RideMapScreen extends StatefulWidget {
     required this.onEndRide,
     required this.onHostRide,
     required this.onJoinRide,
+    this.onHostRideWithPlace,
     this.riderRepository = const RiderRepository(),
     this.locationService = const LocationService(),
     this.apiService,
+    this.searchService,
     this.onRidersUpdated,
   });
 
@@ -30,9 +34,12 @@ class RideMapScreen extends StatefulWidget {
   final VoidCallback onEndRide;
   final VoidCallback onHostRide;
   final VoidCallback onJoinRide;
+  final void Function(PlaceResult place, RoutePreview? route, LatLng? near)?
+  onHostRideWithPlace;
   final RiderRepository riderRepository;
   final LocationService locationService;
   final RideApiService? apiService;
+  final MapSearchService? searchService;
   final ValueChanged<List<RiderPosition>>? onRidersUpdated;
 
   @override
@@ -58,9 +65,22 @@ class _RideMapScreenState extends State<RideMapScreen>
   bool _isSheetCollapsed = false;
   bool _bannerDismissed = false;
 
+  // Map search, tap-to-pin, and real road route state.
+  PlaceResult? _previewPlace;
+  RoutePreview? _previewRoute;
+  RoutePreview? _activeRoute;
+  LatLng? _remoteDestPoint;
+  LatLng? _lastRoutedOrigin;
+  int _routeRequestId = 0;
+  bool _isLoadingRoute = false;
+  bool _isPickingOnMap = false;
+
   bool get _isLiveBackendRide =>
       widget.apiService?.isEnabled == true &&
       widget.activeRide?.currentUserId != null;
+
+  LatLng? get _activeDestPoint =>
+      widget.activeRide?.destinationPoint ?? _remoteDestPoint;
 
   @override
   void initState() {
@@ -70,6 +90,9 @@ class _RideMapScreenState extends State<RideMapScreen>
     _startLocationTracking();
     if (_isLiveBackendRide) {
       _startBackendSync();
+    }
+    if (widget.activeRide != null) {
+      _refreshActiveRideRoute(force: true);
     }
   }
 
@@ -86,8 +109,19 @@ class _RideMapScreenState extends State<RideMapScreen>
     _stopBackendSync();
     _liveRiders = const [];
     _lastPositionSentAt = null;
+    _remoteDestPoint = null;
+    _activeRoute = null;
+    _lastRoutedOrigin = null;
+    if (widget.activeRide != null) {
+      _previewPlace = null;
+      _previewRoute = null;
+      _isPickingOnMap = false;
+    }
     if (_isLiveBackendRide) {
       _startBackendSync();
+    }
+    if (widget.activeRide != null) {
+      _refreshActiveRideRoute(force: true);
     }
   }
 
@@ -181,9 +215,21 @@ class _RideMapScreenState extends State<RideMapScreen>
         return;
       }
 
+      final hadDest = _activeDestPoint != null;
+      final incomingDest =
+          (snapshot.destLat != null && snapshot.destLng != null)
+          ? LatLng(snapshot.destLat!, snapshot.destLng!)
+          : null;
+
       setState(() {
         _liveRiders = snapshot.riders;
+        if (incomingDest != null) {
+          _remoteDestPoint = incomingDest;
+        }
       });
+      if (!hadDest && incomingDest != null) {
+        _refreshActiveRideRoute(force: true);
+      }
       widget.onRidersUpdated?.call(snapshot.riders);
     } on RideApiException {
       // Keep the last known positions on screen if a single poll fails.
@@ -276,6 +322,9 @@ class _RideMapScreenState extends State<RideMapScreen>
     if (_isLiveBackendRide) {
       _sendPositionIfNeeded(fix);
     }
+    if (widget.activeRide != null) {
+      _refreshActiveRideRoute();
+    }
     if (!_followMe || !_isMapReady) return;
 
     final camera = _mapController.camera;
@@ -312,6 +361,154 @@ class _RideMapScreenState extends State<RideMapScreen>
     if (!_isMapReady) return;
     final nextZoom = (_mapController.camera.zoom + delta).clamp(3.0, 18.0);
     _mapController.move(_mapController.camera.center, nextZoom);
+  }
+
+  Future<void> _openPlaceSearch() async {
+    final search = widget.searchService;
+    if (search == null) {
+      widget.onHostRide();
+      return;
+    }
+
+    final near =
+        _myFix?.point ?? (_isMapReady ? _mapController.camera.center : null);
+    final action = await showModalBottomSheet<PlaceSearchAction>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (_) => PlaceSearchSheet(
+        searchService: search,
+        nearPoint: near,
+        initialQuery: _previewPlace?.name ?? '',
+      ),
+    );
+    if (!mounted || action == null) return;
+
+    if (action.pickOnMap) {
+      setState(() {
+        _isPickingOnMap = true;
+        _followMe = false;
+      });
+      return;
+    }
+
+    if (action.place != null) {
+      await _selectPreviewPlace(action.place!);
+    }
+  }
+
+  Future<void> _pickPointOnMap(LatLng point) async {
+    final search = widget.searchService;
+    setState(() {
+      _isPickingOnMap = false;
+      _followMe = false;
+      _previewPlace = PlaceResult(
+        name: 'Pinned spot',
+        subtitle:
+            '${point.latitude.toStringAsFixed(4)}, ${point.longitude.toStringAsFixed(4)}',
+        point: point,
+      );
+      _previewRoute = null;
+      _isLoadingRoute = true;
+    });
+
+    final resolved = search == null
+        ? _previewPlace!
+        : await search.reverseGeocode(point);
+    if (!mounted || _previewPlace?.point != point) return;
+    await _selectPreviewPlace(resolved);
+  }
+
+  Future<void> _selectPreviewPlace(PlaceResult place) async {
+    final search = widget.searchService;
+    final origin =
+        _myFix?.point ??
+        (_isMapReady
+            ? _mapController.camera.center
+            : const LatLng(kMapCenterLat, kMapCenterLng));
+    final reqId = ++_routeRequestId;
+
+    setState(() {
+      _isPickingOnMap = false;
+      _followMe = false;
+      _previewPlace = place;
+      _previewRoute = null;
+      _isLoadingRoute = search != null;
+    });
+
+    if (_isMapReady) {
+      _fitCameraToPoints([origin, place.point]);
+    }
+    if (search == null) return;
+
+    final route = await search.fetchRoute(from: origin, to: place.point);
+    if (!mounted || reqId != _routeRequestId || _previewPlace != place) return;
+    setState(() {
+      _previewRoute = route;
+      _isLoadingRoute = false;
+    });
+    if (_isMapReady) {
+      _fitCameraToPoints(route.points);
+    }
+  }
+
+  void _clearPreview() {
+    _routeRequestId++;
+    setState(() {
+      _previewPlace = null;
+      _previewRoute = null;
+      _isLoadingRoute = false;
+      _isPickingOnMap = false;
+    });
+  }
+
+  Future<void> _refreshActiveRideRoute({bool force = false}) async {
+    final search = widget.searchService;
+    final dest = _activeDestPoint;
+    final origin = _myFix?.point;
+    if (search == null || dest == null || origin == null) return;
+
+    if (!force && _lastRoutedOrigin != null) {
+      final movedMeters = const Distance().as(
+        LengthUnit.Meter,
+        _lastRoutedOrigin!,
+        origin,
+      );
+      if (movedMeters < 150) return;
+    }
+
+    _lastRoutedOrigin = origin;
+    final reqId = ++_routeRequestId;
+    final code = widget.activeRide?.joinCode;
+    final route = await search.fetchRoute(from: origin, to: dest);
+    if (!mounted ||
+        reqId != _routeRequestId ||
+        widget.activeRide?.joinCode != code) {
+      return;
+    }
+    setState(() {
+      _activeRoute = route;
+    });
+  }
+
+  void _fitCameraToPoints(List<LatLng> points) {
+    if (!_isMapReady || points.isEmpty) return;
+    if (points.length == 1) {
+      _mapController.move(points.first, 15.0);
+      return;
+    }
+    final bounds = LatLngBounds.fromPoints(points);
+    if (bounds.southWest == bounds.northEast) {
+      _mapController.move(points.first, 15.0);
+      return;
+    }
+    _mapController.fitCamera(
+      CameraFit.bounds(
+        bounds: bounds,
+        padding: const EdgeInsets.fromLTRB(48, 120, 48, 250),
+        maxZoom: 16.0,
+      ),
+    );
   }
 
   Future<void> _handlePermissionAction() async {
@@ -466,18 +663,40 @@ class _RideMapScreenState extends State<RideMapScreen>
     );
   }
 
+  List<LatLng> _currentRoutePoints(ActiveRide? ride) {
+    if (ride != null) {
+      if (_activeRoute != null && _activeRoute!.points.length >= 2) {
+        return _activeRoute!.points;
+      }
+      if (!_isLiveBackendRide && _activeDestPoint == null) {
+        return kMockRoutePoints;
+      }
+      return const [];
+    }
+    if (_previewRoute != null && _previewRoute!.points.length >= 2) {
+      return _previewRoute!.points;
+    }
+    return const [];
+  }
+
   List<Marker> _buildMarkers(
     BuildContext context,
     List<RiderPosition> positions,
-    bool hasActiveRide,
+    ActiveRide? ride,
+    List<LatLng> routePoints,
   ) {
     final colors = Theme.of(context).colorScheme;
     final markers = <Marker>[];
 
-    if (hasActiveRide) {
-      markers.addAll([
+    final LatLng? destinationPin = ride != null
+        ? (_activeDestPoint ??
+              (!_isLiveBackendRide ? kMockRoutePoints.last : null))
+        : _previewPlace?.point;
+
+    if (routePoints.length >= 2 && _myFix == null) {
+      markers.add(
         Marker(
-          point: kMockRoutePoints.first,
+          point: routePoints.first,
           width: 22,
           height: 22,
           child: Container(
@@ -488,17 +707,24 @@ class _RideMapScreenState extends State<RideMapScreen>
             ),
           ),
         ),
+      );
+    }
+
+    if (destinationPin != null) {
+      markers.add(
         Marker(
-          point: kMockRoutePoints.last,
+          point: destinationPin,
           width: 36,
           height: 36,
           alignment: Alignment.topCenter,
           child: Icon(Icons.location_on, color: colors.primary, size: 36),
         ),
-      ]);
+      );
+    }
 
+    if (ride != null) {
       // Avoid drawing a duplicate marker for the current rider when "You" is shown.
-      final myId = widget.activeRide?.currentUserId;
+      final myId = ride.currentUserId;
       final Iterable<RiderPosition> peerRiders;
       if (_isLiveBackendRide) {
         peerRiders = _myFix == null
@@ -548,6 +774,7 @@ class _RideMapScreenState extends State<RideMapScreen>
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final ride = widget.activeRide;
     final positions = _effectivePositions();
+    final routePoints = _currentRoutePoints(ride);
     final showPermissionBanner =
         !_bannerDismissed &&
         (_locationStatus == LocationStatus.denied ||
@@ -572,6 +799,16 @@ class _RideMapScreenState extends State<RideMapScreen>
             interactionOptions: const InteractionOptions(
               flags: InteractiveFlag.all & ~InteractiveFlag.rotate,
             ),
+            onTap: (_, point) {
+              if (_isPickingOnMap && ride == null) {
+                _pickPointOnMap(point);
+              }
+            },
+            onLongPress: (_, point) {
+              if (ride == null && widget.searchService != null) {
+                _pickPointOnMap(point);
+              }
+            },
             onMapReady: () {
               _isMapReady = true;
               final myPoint = _myFix?.point;
@@ -591,23 +828,23 @@ class _RideMapScreenState extends State<RideMapScreen>
           children: [
             // OpenFreeMap vector map (falls back to OpenStreetMap if offline).
             OpenFreeMapLayer(isDark: isDark),
-            if (ride != null)
+            if (routePoints.length >= 2)
               PolylineLayer(
                 polylines: [
                   Polyline(
-                    points: kMockRoutePoints,
+                    points: routePoints,
                     strokeWidth: 12,
                     color: colors.primary.withValues(alpha: 0.22),
                   ),
                   Polyline(
-                    points: kMockRoutePoints,
+                    points: routePoints,
                     strokeWidth: 5,
                     color: colors.primary,
                   ),
                 ],
               ),
             MarkerLayer(
-              markers: _buildMarkers(context, positions, ride != null),
+              markers: _buildMarkers(context, positions, ride, routePoints),
             ),
           ],
         ),
@@ -621,7 +858,22 @@ class _RideMapScreenState extends State<RideMapScreen>
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                _MapTopCard(activeRide: ride, onTapIdle: widget.onHostRide),
+                _MapTopCard(
+                  activeRide: ride,
+                  previewPlace: _previewPlace,
+                  onTapSearch: _openPlaceSearch,
+                  onClearPreview: _clearPreview,
+                ),
+                if (_isPickingOnMap && ride == null) ...[
+                  const SizedBox(height: 8),
+                  _PickOnMapBanner(
+                    onCancel: () {
+                      setState(() {
+                        _isPickingOnMap = false;
+                      });
+                    },
+                  ),
+                ],
                 if (showPermissionBanner) ...[
                   const SizedBox(height: 8),
                   _LocationBanner(
@@ -703,20 +955,38 @@ class _RideMapScreenState extends State<RideMapScreen>
                   child: const _MapAttributionChip(),
                 ),
               ),
-              _MapBottomSheet(
-                activeRide: ride,
-                positions: positions,
-                isCollapsed: _isSheetCollapsed,
-                onToggleCollapse: () {
-                  setState(() {
-                    _isSheetCollapsed = !_isSheetCollapsed;
-                  });
-                },
-                onOpenConvoy: _openConvoy,
-                onEndRide: widget.onEndRide,
-                onHostRide: widget.onHostRide,
-                onJoinRide: widget.onJoinRide,
-              ),
+              if (ride == null && _previewPlace != null)
+                _PreviewDestinationCard(
+                  place: _previewPlace!,
+                  route: _previewRoute,
+                  isLoadingRoute: _isLoadingRoute,
+                  onHostHere: () {
+                    final place = _previewPlace!;
+                    final route = _previewRoute;
+                    if (widget.onHostRideWithPlace != null) {
+                      widget.onHostRideWithPlace!(place, route, _myFix?.point);
+                    } else {
+                      widget.onHostRide();
+                    }
+                  },
+                  onClose: _clearPreview,
+                )
+              else
+                _MapBottomSheet(
+                  activeRide: ride,
+                  routePreview: _activeRoute,
+                  positions: positions,
+                  isCollapsed: _isSheetCollapsed,
+                  onToggleCollapse: () {
+                    setState(() {
+                      _isSheetCollapsed = !_isSheetCollapsed;
+                    });
+                  },
+                  onOpenConvoy: _openConvoy,
+                  onEndRide: widget.onEndRide,
+                  onHostRide: widget.onHostRide,
+                  onJoinRide: widget.onJoinRide,
+                ),
             ],
           ),
         ),
@@ -871,18 +1141,65 @@ class _LocationBanner extends StatelessWidget {
   }
 }
 
-// Floating top bar showing either the active destination or "Where are you riding?".
+// Banner shown while the user is tapping the map to pick a destination pin.
+class _PickOnMapBanner extends StatelessWidget {
+  const _PickOnMapBanner({required this.onCancel});
+
+  final VoidCallback onCancel;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return Material(
+      color: colors.primaryContainer,
+      elevation: 3,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 6, 4, 6),
+        child: Row(
+          children: [
+            Icon(Icons.touch_app, size: 18, color: colors.onPrimaryContainer),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Tap anywhere on the map to set destination',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  color: colors.onPrimaryContainer,
+                ),
+              ),
+            ),
+            TextButton(onPressed: onCancel, child: const Text('Cancel')),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// Floating top bar showing active destination, searched place, or search prompt.
 class _MapTopCard extends StatelessWidget {
-  const _MapTopCard({required this.activeRide, required this.onTapIdle});
+  const _MapTopCard({
+    required this.activeRide,
+    required this.previewPlace,
+    required this.onTapSearch,
+    required this.onClearPreview,
+  });
 
   final ActiveRide? activeRide;
-  final VoidCallback onTapIdle;
+  final PlaceResult? previewPlace;
+  final VoidCallback onTapSearch;
+  final VoidCallback onClearPreview;
 
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     final text = Theme.of(context).textTheme;
     final ride = activeRide;
+    final label =
+        ride?.destination ?? previewPlace?.name ?? 'Where are you riding?';
+    final isPlaceholder = ride == null && previewPlace == null;
 
     return Material(
       color: colors.surfaceContainerLow,
@@ -894,7 +1211,7 @@ class _MapTopCard extends StatelessWidget {
       ),
       child: InkWell(
         borderRadius: BorderRadius.circular(16),
-        onTap: ride == null ? onTapIdle : null,
+        onTap: ride == null ? onTapSearch : null,
         child: SizedBox(
           height: 52,
           child: Padding(
@@ -904,24 +1221,31 @@ class _MapTopCard extends StatelessWidget {
                 Icon(
                   ride == null ? Icons.search : Icons.navigation_rounded,
                   size: 20,
-                  color: ride == null
+                  color: isPlaceholder
                       ? colors.onSurfaceVariant
                       : colors.primary,
                 ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Text(
-                    ride?.destination ?? 'Where are you riding?',
+                    label,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: text.bodyLarge?.copyWith(
                       fontWeight: FontWeight.w700,
-                      color: ride == null
+                      color: isPlaceholder
                           ? colors.onSurfaceVariant
                           : colors.onSurface,
                     ),
                   ),
                 ),
+                if (ride == null && previewPlace != null)
+                  IconButton(
+                    icon: const Icon(Icons.close, size: 18),
+                    tooltip: 'Clear destination',
+                    visualDensity: VisualDensity.compact,
+                    onPressed: onClearPreview,
+                  ),
                 if (ride != null) ...[
                   const SizedBox(width: 8),
                   Container(
@@ -947,6 +1271,118 @@ class _MapTopCard extends StatelessWidget {
               ],
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+// Bottom preview sheet shown after searching or pinning a destination before hosting.
+class _PreviewDestinationCard extends StatelessWidget {
+  const _PreviewDestinationCard({
+    required this.place,
+    required this.route,
+    required this.isLoadingRoute,
+    required this.onHostHere,
+    required this.onClose,
+  });
+
+  final PlaceResult place;
+  final RoutePreview? route;
+  final bool isLoadingRoute;
+  final VoidCallback onHostHere;
+  final VoidCallback onClose;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+
+    return Material(
+      color: colors.surfaceContainerLow,
+      elevation: 10,
+      shadowColor: Colors.black.withValues(alpha: 0.25),
+      shape: RoundedRectangleBorder(
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+        side: BorderSide(color: colors.outlineVariant),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        place.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: text.titleLarge?.copyWith(
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      if (place.subtitle.isNotEmpty) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          place.subtitle,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(color: colors.onSurfaceVariant),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                IconButton(
+                  onPressed: onClose,
+                  icon: const Icon(Icons.close),
+                  tooltip: 'Close preview',
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            if (isLoadingRoute)
+              Row(
+                children: [
+                  const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Finding road route…',
+                    style: TextStyle(color: colors.onSurfaceVariant),
+                  ),
+                ],
+              )
+            else if (route != null)
+              Row(
+                children: [
+                  Icon(Icons.directions_bike, size: 18, color: colors.primary),
+                  const SizedBox(width: 6),
+                  Text(
+                    '${route!.durationMinutes} min · ${route!.distanceKm} km'
+                    '${route!.isFallback ? ' (straight-line est.)' : ''}',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w700,
+                      color: colors.onSurface,
+                    ),
+                  ),
+                ],
+              ),
+            const SizedBox(height: 14),
+            FilledButton.icon(
+              onPressed: onHostHere,
+              icon: const Icon(Icons.add_road),
+              label: const Text('Host Ride Here'),
+            ),
+          ],
         ),
       ),
     );
@@ -999,6 +1435,7 @@ class _MapActionButton extends StatelessWidget {
 class _MapBottomSheet extends StatelessWidget {
   const _MapBottomSheet({
     required this.activeRide,
+    required this.routePreview,
     required this.positions,
     required this.isCollapsed,
     required this.onToggleCollapse,
@@ -1009,6 +1446,7 @@ class _MapBottomSheet extends StatelessWidget {
   });
 
   final ActiveRide? activeRide;
+  final RoutePreview? routePreview;
   final List<RiderPosition> positions;
   final bool isCollapsed;
   final VoidCallback onToggleCollapse;
@@ -1135,7 +1573,7 @@ class _MapBottomSheet extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 12),
-                _RouteSummaryCard(ride: ride),
+                _RouteSummaryCard(ride: ride, routePreview: routePreview),
                 const SizedBox(height: 12),
                 FilledButton.tonal(
                   style: FilledButton.styleFrom(
@@ -1154,7 +1592,7 @@ class _MapBottomSheet extends StatelessWidget {
               if (!isCollapsed && ride == null) ...[
                 const SizedBox(height: 8),
                 Text(
-                  'Start a ride or join with a 6-character code.',
+                  'Search above, long-press the map to drop a pin, or join with a code.',
                   style: TextStyle(color: colors.onSurfaceVariant),
                 ),
                 const SizedBox(height: 14),
@@ -1288,13 +1726,16 @@ class _RiderAvatarStack extends StatelessWidget {
 
 // Soft inset panel showing Pickup, Destination, ETA, and Distance.
 class _RouteSummaryCard extends StatelessWidget {
-  const _RouteSummaryCard({required this.ride});
+  const _RouteSummaryCard({required this.ride, this.routePreview});
 
   final ActiveRide ride;
+  final RoutePreview? routePreview;
 
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
+    final minutes = routePreview?.durationMinutes ?? ride.durationMinutes;
+    final distanceKm = routePreview?.distanceKm ?? ride.distanceKm;
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
@@ -1386,7 +1827,7 @@ class _RouteSummaryCard extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
                 Text(
-                  '${ride.durationMinutes} min',
+                  minutes == null ? '-- min' : '$minutes min',
                   style: const TextStyle(
                     fontSize: 20,
                     fontWeight: FontWeight.w800,
@@ -1394,7 +1835,7 @@ class _RouteSummaryCard extends StatelessWidget {
                   ),
                 ),
                 Text(
-                  '${ride.distanceKm} km',
+                  distanceKm == null ? '-- km' : '$distanceKm km',
                   style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
