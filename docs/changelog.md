@@ -3,7 +3,9 @@
 ## 2026-11-22
 - Added Google Maps-style place search (`Photon` / OSM autocomplete), tap/long-press to drop a destination pin with reverse geocoding, live road routing (`OSRM` polyline, distance, ETA + straight-line fallback), and a pre-host route preview card on `RideMapScreen` + destination autocomplete inside `HostRideScreen`.
 - Added `dest_lat` and `dest_lng` columns to MariaDB `rides` (`backend/sql/schema.sql`, `backend/app/db.py`, `backend/app/main.py`, `backend/app/schemas.py`) so every joined rider shares the real destination pin and road route, plus a one-command `backend/deploy.bat` targeting `/srv/ridesync`.
-- Saved backend Server URL and editable rider display name locally with `shared_preferences`, defaulting to the live HTTPS server (`https://ridesync.ddns.net`) on a clean GPS map instead of a startup mock ride (with Offline demo kept as a Profile toggle).
+- Removed all mock data files and mock repositories (`lib/data/`, `lib/repositories/`, `test/repository_test.dart`) and offline preview fallbacks, replacing them with clean empty states across Rides, Convoy, and Map.
+- Saved backend Server URL and editable rider display name locally with `shared_preferences`, moved `API_BASE_URL` to build-time configuration (`.env` / `.env.example` locally and `vars.API_BASE_URL` in CI), and hid the developer server switcher in configured release builds.
+- Added GitHub Actions Android CI (`.github/workflows/build-android.yml`) that runs backend `pytest`, `dart format`, `flutter analyze`, and `flutter test`, uploads signed APK + SHA-256 artifacts on every branch push, and publishes `.apk`, `.sha256`, and Play Store `.aab` GitHub Releases only on `v*` tags.
 
 ## 2026-11-18
 - Added the FastAPI + MariaDB [backend](backend/README.md) (`users`, `rides`, `ride_members`, `positions` schema, REST endpoints for creating/joining/syncing/ending rides, `init_db.py`, Windows `start.bat` launcher, and `pytest` coverage).
