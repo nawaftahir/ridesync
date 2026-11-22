@@ -5,7 +5,9 @@ class AppPreferences {
   static const String _serverUrlKey = 'server_url';
   static const String _riderNameKey = 'rider_name';
 
-  static const String defaultLiveServerUrl = 'https://ridesync.ddns.net';
+  // Injected at build time via `--dart-define=API_BASE_URL=...`
+  // or `--dart-define-from-file=.env`. Empty when not provided.
+  static const String buildApiBaseUrl = String.fromEnvironment('API_BASE_URL');
   static const String defaultRiderName = 'Nawaf';
 
   Future<String?> loadServerUrl() async {

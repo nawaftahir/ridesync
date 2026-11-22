@@ -45,7 +45,6 @@ class RidePositionsSnapshot {
 }
 
 // Talks to the RideSync FastAPI backend over HTTP.
-// Leave `baseUrl` empty to stay in offline mock-preview mode.
 class RideApiService {
   RideApiService({
     String baseUrl = const String.fromEnvironment('API_BASE_URL'),

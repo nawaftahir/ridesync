@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart';
@@ -44,16 +43,6 @@ class _HostRideScreenState extends State<HostRideScreen> {
   ActiveRide? _createdRide;
   String? _errorMessage;
   bool _isLoading = false;
-
-  // Builds a random 6-letter uppercase code, e.g. "KXMQTB" (offline mode only).
-  String _generateCode() {
-    final random = Random();
-    String code = '';
-    for (int i = 0; i < 6; i++) {
-      code += String.fromCharCode(65 + random.nextInt(26));
-    }
-    return code;
-  }
 
   void _onDestinationChanged(String value) {
     // Editing text clears the previously selected pin until a new suggestion is picked.
@@ -125,20 +114,8 @@ class _HostRideScreenState extends State<HostRideScreen> {
 
     final api = widget.apiService;
     if (api == null || !api.isEnabled) {
-      // Offline mock-preview mode.
       setState(() {
-        _errorMessage = null;
-        _createdRide = ActiveRide(
-          joinCode: _generateCode(),
-          destination: destination,
-          destLat: point?.latitude,
-          destLng: point?.longitude,
-          distanceKm: matchedInitialRoute?.distanceKm,
-          durationMinutes: matchedInitialRoute?.durationMinutes,
-          isHost: true,
-          currentUserName: widget.hostName,
-        );
-        _joinCode = _createdRide!.joinCode;
+        _errorMessage = 'Set a Backend Server URL in Profile first.';
       });
       return;
     }

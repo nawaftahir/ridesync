@@ -242,7 +242,7 @@ void main() {
       });
 
       final api = RideApiService(
-        baseUrl: 'https://ridesync.ddns.net',
+        baseUrl: 'https://api.example.com',
         client: apiClient,
       );
       final search = MapSearchService(client: searchClient);

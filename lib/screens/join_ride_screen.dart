@@ -1,6 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:ridesync/models/active_ride.dart';
-import 'package:ridesync/repositories/ride_repository.dart';
 import 'package:ridesync/services/ride_api_service.dart';
 
 class JoinRideScreen extends StatefulWidget {
@@ -14,13 +12,10 @@ class JoinRideScreen extends StatefulWidget {
 }
 
 class _JoinRideScreenState extends State<JoinRideScreen> {
-  static const _rideRepository = RideRepository();
-
   final _codeController = TextEditingController();
   String? _errorMessage;
   bool _isLoading = false;
 
-  // async/await: this function pauses at `await` without freezing the UI.
   Future<void> _onJoinTapped() async {
     final code = _codeController.text.trim().toUpperCase();
     if (code.isEmpty) {
@@ -30,64 +25,36 @@ class _JoinRideScreenState extends State<JoinRideScreen> {
       return;
     }
 
-    setState(() {
-      _errorMessage = null;
-      _isLoading = true;
-    });
-
     final api = widget.apiService;
-    if (api != null && api.isEnabled) {
-      try {
-        final joined = await api.joinRide(
-          code: code,
-          riderName: widget.riderName,
-        );
-        if (!mounted) return;
-        setState(() {
-          _isLoading = false;
-        });
-        Navigator.of(context).pop(joined);
-      } on RideApiException catch (error) {
-        if (!mounted) return;
-        setState(() {
-          _errorMessage = error.message;
-          _isLoading = false;
-        });
-      }
-      return;
-    }
-
-    // Offline mock-preview fallback.
-    await Future.delayed(const Duration(milliseconds: 800));
-
-    final ride = _rideRepository.findByCode(code);
-
-    // `mounted` check: if the user left this screen during the delay, stop.
-    if (!mounted) return;
-
-    if (ride == null) {
+    if (api == null || !api.isEnabled) {
       setState(() {
-        _errorMessage =
-            'No ride found for "$code". '
-            'Try MOTO89 or RIDE42.';
-        _isLoading = false;
+        _errorMessage = 'Set a Backend Server URL in Profile first.';
       });
       return;
     }
 
     setState(() {
-      _isLoading = false;
+      _errorMessage = null;
+      _isLoading = true;
     });
-    // Return the joined ride to MainScreen so it opens on the Map tab.
-    Navigator.of(context).pop(
-      ActiveRide(
-        joinCode: ride.code,
-        destination: ride.destination,
-        isHost: false,
-        distanceKm: ride.distanceKm,
-        currentUserName: widget.riderName,
-      ),
-    );
+
+    try {
+      final joined = await api.joinRide(
+        code: code,
+        riderName: widget.riderName,
+      );
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+      });
+      Navigator.of(context).pop(joined);
+    } on RideApiException catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _errorMessage = error.message;
+        _isLoading = false;
+      });
+    }
   }
 
   @override
@@ -131,7 +98,6 @@ class _JoinRideScreenState extends State<JoinRideScreen> {
             const SizedBox(height: 16),
 
             FilledButton.icon(
-              // null disables the button (greyed out) while loading.
               onPressed: _isLoading ? null : _onJoinTapped,
               icon: _isLoading
                   ? const SizedBox(
@@ -144,14 +110,13 @@ class _JoinRideScreenState extends State<JoinRideScreen> {
             ),
             const SizedBox(height: 32),
 
-            // Info card showing whether we are using a live server or mock preview.
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(16),
                 child: Text(
                   widget.apiService?.isEnabled == true
-                      ? 'Connected to ${widget.apiService!.cleanBaseUrl} · Enter any live ride code.'
-                      : '🛈  Alpha hint: valid codes are MOTO89 and RIDE42',
+                      ? 'Connected to ${widget.apiService!.cleanBaseUrl} · Enter the 6-character code from your host.'
+                      : 'No server configured. Set your server URL in Profile -> Backend server.',
                   style: text.bodySmall,
                 ),
               ),

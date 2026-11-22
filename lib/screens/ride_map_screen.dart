@@ -3,17 +3,18 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
-import 'package:ridesync/data/mock_map_data.dart';
 import 'package:ridesync/models/active_ride.dart';
 import 'package:ridesync/models/rider.dart';
 import 'package:ridesync/models/rider_position.dart';
-import 'package:ridesync/repositories/rider_repository.dart';
 import 'package:ridesync/screens/convoy_screen.dart';
 import 'package:ridesync/services/location_service.dart';
 import 'package:ridesync/services/map_search_service.dart';
 import 'package:ridesync/services/ride_api_service.dart';
 import 'package:ridesync/widgets/open_free_map_layer.dart';
 import 'package:ridesync/widgets/place_search_sheet.dart';
+
+// Initial map camera position shown only before the device gets its first GPS lock.
+const LatLng _kDefaultMapCenter = LatLng(33.7215, 73.0433);
 
 class RideMapScreen extends StatefulWidget {
   const RideMapScreen({
@@ -23,7 +24,6 @@ class RideMapScreen extends StatefulWidget {
     required this.onHostRide,
     required this.onJoinRide,
     this.onHostRideWithPlace,
-    this.riderRepository = const RiderRepository(),
     this.locationService = const LocationService(),
     this.apiService,
     this.searchService,
@@ -36,7 +36,6 @@ class RideMapScreen extends StatefulWidget {
   final VoidCallback onJoinRide;
   final void Function(PlaceResult place, RoutePreview? route, LatLng? near)?
   onHostRideWithPlace;
-  final RiderRepository riderRepository;
   final LocationService locationService;
   final RideApiService? apiService;
   final MapSearchService? searchService;
@@ -354,7 +353,7 @@ class _RideMapScreenState extends State<RideMapScreen>
       _mapController.move(_myFix!.point, targetZoom);
       return;
     }
-    _mapController.move(const LatLng(kMapCenterLat, kMapCenterLng), 14.0);
+    _mapController.move(_kDefaultMapCenter, 14.0);
   }
 
   void _zoomBy(double delta) {
@@ -423,9 +422,7 @@ class _RideMapScreenState extends State<RideMapScreen>
     final search = widget.searchService;
     final origin =
         _myFix?.point ??
-        (_isMapReady
-            ? _mapController.camera.center
-            : const LatLng(kMapCenterLat, kMapCenterLng));
+        (_isMapReady ? _mapController.camera.center : _kDefaultMapCenter);
     final reqId = ++_routeRequestId;
 
     setState(() {
@@ -528,66 +525,50 @@ class _RideMapScreenState extends State<RideMapScreen>
     }
   }
 
-  // Updates the current rider with live GPS data when a real fix is available.
+  // Combines polled convoy riders with your live local GPS fix.
   List<RiderPosition> _effectivePositions() {
+    final ride = widget.activeRide;
     final fix = _myFix;
-    if (_isLiveBackendRide) {
-      final ride = widget.activeRide!;
-      final myId = ride.currentUserId!;
-      final merged = <RiderPosition>[];
-      var foundMe = false;
+    if (ride == null) return const [];
 
-      for (final pos in _liveRiders) {
-        if (pos.rider.id == myId && fix != null) {
-          foundMe = true;
-          merged.add(
-            RiderPosition(
-              rider: pos.rider,
-              latitude: fix.point.latitude,
-              longitude: fix.point.longitude,
-              speedKmh: fix.speedKmh,
-              headingDegrees: pos.headingDegrees,
-              batteryPercent: pos.batteryPercent,
-              ageSeconds: 0,
-            ),
-          );
-        } else {
-          merged.add(pos);
-        }
-      }
+    final myId = ride.currentUserId;
+    final merged = <RiderPosition>[];
+    var foundMe = false;
 
-      if (!foundMe && fix != null) {
-        merged.insert(
-          0,
+    for (final pos in _liveRiders) {
+      if (myId != null && pos.rider.id == myId && fix != null) {
+        foundMe = true;
+        merged.add(
           RiderPosition(
-            rider: Rider(id: myId, name: ride.currentUserName),
+            rider: pos.rider,
             latitude: fix.point.latitude,
             longitude: fix.point.longitude,
             speedKmh: fix.speedKmh,
-            headingDegrees: 0,
-            batteryPercent: null,
+            headingDegrees: pos.headingDegrees,
+            batteryPercent: pos.batteryPercent,
             ageSeconds: 0,
           ),
         );
+      } else {
+        merged.add(pos);
       }
-      return merged;
     }
 
-    final base = widget.riderRepository.positions;
-    if (fix == null || base.isEmpty) return base;
-    final me = base.first;
-    return [
-      RiderPosition(
-        rider: me.rider,
-        latitude: fix.point.latitude,
-        longitude: fix.point.longitude,
-        speedKmh: fix.speedKmh,
-        headingDegrees: me.headingDegrees,
-        batteryPercent: me.batteryPercent,
-        ageSeconds: 0,
-      ),
-      ...base.skip(1),
-    ];
+    if (!foundMe && fix != null) {
+      merged.insert(
+        0,
+        RiderPosition(
+          rider: Rider(id: myId ?? 0, name: ride.currentUserName),
+          latitude: fix.point.latitude,
+          longitude: fix.point.longitude,
+          speedKmh: fix.speedKmh,
+          headingDegrees: 0,
+          batteryPercent: null,
+          ageSeconds: 0,
+        ),
+      );
+    }
+    return merged;
   }
 
   void _openConvoy() {
@@ -668,9 +649,6 @@ class _RideMapScreenState extends State<RideMapScreen>
       if (_activeRoute != null && _activeRoute!.points.length >= 2) {
         return _activeRoute!.points;
       }
-      if (!_isLiveBackendRide && _activeDestPoint == null) {
-        return kMockRoutePoints;
-      }
       return const [];
     }
     if (_previewRoute != null && _previewRoute!.points.length >= 2) {
@@ -689,8 +667,7 @@ class _RideMapScreenState extends State<RideMapScreen>
     final markers = <Marker>[];
 
     final LatLng? destinationPin = ride != null
-        ? (_activeDestPoint ??
-              (!_isLiveBackendRide ? kMockRoutePoints.last : null))
+        ? _activeDestPoint
         : _previewPlace?.point;
 
     if (routePoints.length >= 2 && _myFix == null) {
@@ -725,14 +702,9 @@ class _RideMapScreenState extends State<RideMapScreen>
     if (ride != null) {
       // Avoid drawing a duplicate marker for the current rider when "You" is shown.
       final myId = ride.currentUserId;
-      final Iterable<RiderPosition> peerRiders;
-      if (_isLiveBackendRide) {
-        peerRiders = _myFix == null
-            ? positions
-            : positions.where((p) => p.rider.id != myId);
-      } else {
-        peerRiders = _myFix == null ? positions : positions.skip(1);
-      }
+      final peerRiders = _myFix == null
+          ? positions
+          : positions.where((p) => p.rider.id != (myId ?? 0));
       for (final position in peerRiders) {
         final dotColor = position.isStale ? colors.tertiary : colors.secondary;
         markers.add(
@@ -786,7 +758,7 @@ class _RideMapScreenState extends State<RideMapScreen>
         FlutterMap(
           mapController: _mapController,
           options: MapOptions(
-            initialCenter: const LatLng(kMapCenterLat, kMapCenterLng),
+            initialCenter: _kDefaultMapCenter,
             initialZoom: 14, // 1 = world, 14 = street level
             minZoom: 3,
             maxZoom: 18,
@@ -1456,9 +1428,14 @@ class _MapBottomSheet extends StatelessWidget {
   final VoidCallback onJoinRide;
 
   String _riderSummary() {
+    if (positions.isEmpty) {
+      return 'Waiting for GPS updates…';
+    }
     final staleCount = positions.where((p) => p.isStale).length;
     if (staleCount == 0) {
-      return 'All ${positions.length} riders active';
+      return positions.length == 1
+          ? '1 rider active'
+          : 'All ${positions.length} riders active';
     }
     final activeCount = positions.length - staleCount;
     return '$activeCount active · $staleCount signal lost';
@@ -1549,7 +1526,11 @@ class _MapBottomSheet extends StatelessWidget {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              positions.map((p) => p.rider.name).join(', '),
+                              positions.isEmpty
+                                  ? 'Convoy'
+                                  : positions
+                                        .map((p) => p.rider.name)
+                                        .join(', '),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: const TextStyle(

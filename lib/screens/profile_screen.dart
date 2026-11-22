@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:ridesync/repositories/ride_repository.dart';
 import 'package:ridesync/screens/login_screen.dart';
 import 'package:ridesync/services/app_preferences.dart';
 import 'package:ridesync/services/ride_api_service.dart';
@@ -8,16 +7,14 @@ import 'package:ridesync/services/ride_api_service.dart';
 class ProfileScreen extends StatelessWidget {
   const ProfileScreen({
     super.key,
-    this.rideRepository = const RideRepository(),
     this.themeMode = ThemeMode.system,
     this.onThemeModeChanged,
     this.riderName = AppPreferences.defaultRiderName,
     this.onRiderNameChanged,
-    this.serverUrl = '',
+    this.serverUrl = AppPreferences.buildApiBaseUrl,
     this.onServerUrlChanged,
   });
 
-  final RideRepository rideRepository;
   final ThemeMode themeMode;
   final ValueChanged<ThemeMode>? onThemeModeChanged;
   final String riderName;
@@ -41,11 +38,6 @@ class ProfileScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     final text = Theme.of(context).textTheme;
-    final pastRides = rideRepository.pastRides;
-    final totalKm = pastRides.fold<double>(
-      0,
-      (sum, ride) => sum + ride.distanceKm,
-    );
 
     return Scaffold(
       appBar: AppBar(title: const Text('Profile')),
@@ -112,26 +104,7 @@ class ProfileScreen extends StatelessWidget {
               ),
             ),
           ),
-          const SizedBox(height: 8),
-
-          Row(
-            children: [
-              Expanded(
-                child: _StatCard(
-                  label: 'Past rides',
-                  value: '${pastRides.length}',
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: _StatCard(
-                  label: 'Total distance',
-                  value: '${totalKm.toStringAsFixed(1)} km',
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 20),
+          const SizedBox(height: 16),
 
           FilledButton.icon(
             onPressed: () => Navigator.of(context)
@@ -179,31 +152,25 @@ class ProfileScreen extends StatelessWidget {
                     ),
                   ),
                 ),
-                const Divider(height: 1),
-                ListTile(
-                  leading: const Icon(Icons.dns_outlined),
-                  title: const Text('Backend server'),
-                  subtitle: Text(
-                    serverUrl.trim().isEmpty
-                        ? 'Offline preview (mock rides)'
-                        : serverUrl.trim(),
+                if (onServerUrlChanged != null) ...[
+                  const Divider(height: 1),
+                  ListTile(
+                    leading: const Icon(Icons.dns_outlined),
+                    title: const Text('Backend server'),
+                    subtitle: Text(
+                      serverUrl.trim().isEmpty
+                          ? 'Not configured'
+                          : serverUrl.trim(),
+                    ),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => _openServerDialog(context),
                   ),
-                  trailing: onServerUrlChanged == null
-                      ? null
-                      : const Icon(Icons.chevron_right),
-                  onTap: onServerUrlChanged == null
-                      ? null
-                      : () => _openServerDialog(context),
-                ),
+                ],
                 const Divider(height: 1),
-                ListTile(
-                  leading: const Icon(Icons.two_wheeler),
-                  title: const Text('RideSync'),
-                  subtitle: Text(
-                    serverUrl.trim().isEmpty
-                        ? 'Version 1.0.0 (Mock data preview)'
-                        : 'Version 1.0.0 (Live backend mode)',
-                  ),
+                const ListTile(
+                  leading: Icon(Icons.two_wheeler),
+                  title: Text('RideSync'),
+                  subtitle: Text('Version 1.0.0'),
                 ),
               ],
             ),
@@ -311,8 +278,8 @@ class _ServerConfigDialogState extends State<_ServerConfigDialog> {
     if (!api.isEnabled) {
       api.dispose();
       setState(() {
-        _statusOk = true;
-        _statusMessage = 'Offline preview mode selected.';
+        _statusOk = false;
+        _statusMessage = 'Enter a server URL to test.';
       });
       return;
     }
@@ -365,7 +332,7 @@ class _ServerConfigDialogState extends State<_ServerConfigDialog> {
               controller: _controller,
               keyboardType: TextInputType.url,
               decoration: const InputDecoration(
-                hintText: 'Leave empty for offline demo',
+                hintText: 'https://api.example.com',
                 labelText: 'Server URL',
                 border: OutlineInputBorder(),
               ),
@@ -375,15 +342,11 @@ class _ServerConfigDialogState extends State<_ServerConfigDialog> {
               spacing: 8,
               runSpacing: 8,
               children: [
-                ActionChip(
-                  label: const Text('Live (ridesync.ddns.net)'),
-                  onPressed: () =>
-                      _setPreset(AppPreferences.defaultLiveServerUrl),
-                ),
-                ActionChip(
-                  label: const Text('Offline'),
-                  onPressed: () => _setPreset(''),
-                ),
+                if (AppPreferences.buildApiBaseUrl.isNotEmpty)
+                  ActionChip(
+                    label: const Text('Build default'),
+                    onPressed: () => _setPreset(AppPreferences.buildApiBaseUrl),
+                  ),
                 ActionChip(
                   label: const Text('USB (127.0.0.1:8000)'),
                   onPressed: () => _setPreset('http://127.0.0.1:8000'),
@@ -421,39 +384,6 @@ class _ServerConfigDialogState extends State<_ServerConfigDialog> {
           child: const Text('Save'),
         ),
       ],
-    );
-  }
-}
-
-class _StatCard extends StatelessWidget {
-  const _StatCard({required this.label, required this.value});
-
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
-    final text = Theme.of(context).textTheme;
-
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              value,
-              style: text.titleLarge?.copyWith(fontWeight: FontWeight.w800),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              label,
-              style: text.bodySmall?.copyWith(color: colors.onSurfaceVariant),
-            ),
-          ],
-        ),
-      ),
     );
   }
 }

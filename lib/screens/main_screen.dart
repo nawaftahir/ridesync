@@ -1,9 +1,8 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:ridesync/models/active_ride.dart';
 import 'package:ridesync/models/rider_position.dart';
-import 'package:ridesync/repositories/ride_repository.dart';
-import 'package:ridesync/repositories/rider_repository.dart';
 import 'package:ridesync/screens/group_screen.dart';
 import 'package:ridesync/screens/host_ride_screen.dart';
 import 'package:ridesync/screens/join_ride_screen.dart';
@@ -19,25 +18,20 @@ import 'package:ridesync/services/ride_api_service.dart';
 class MainScreen extends StatefulWidget {
   const MainScreen({
     super.key,
-    this.rideRepository = const RideRepository(),
-    this.riderRepository = const RiderRepository(),
     this.locationService = const LocationService(),
     this.apiService,
     this.mapSearchService,
     this.initialServerUrl,
+    this.initialActiveRide,
     this.themeMode = ThemeMode.system,
     this.onThemeModeChanged,
   });
 
-  final RideRepository rideRepository;
-  final RiderRepository riderRepository;
   final LocationService locationService;
   final RideApiService? apiService;
   final MapSearchService? mapSearchService;
-
-  // Null means "use saved preference, or default live server (ridesync.ddns.net)".
-  // Pass '' explicitly in tests or offline mode to preview mock rides.
   final String? initialServerUrl;
+  final ActiveRide? initialActiveRide;
   final ThemeMode themeMode;
   final ValueChanged<ThemeMode>? onThemeModeChanged;
 
@@ -46,11 +40,6 @@ class MainScreen extends StatefulWidget {
 }
 
 class _MainScreenState extends State<MainScreen> {
-  static const String _envServerUrl = String.fromEnvironment(
-    'API_BASE_URL',
-    defaultValue: AppPreferences.defaultLiveServerUrl,
-  );
-
   final AppPreferences _prefs = AppPreferences();
 
   int _selectedIndex = 0;
@@ -68,28 +57,16 @@ class _MainScreenState extends State<MainScreen> {
   @override
   void initState() {
     super.initState();
+    _activeRide = widget.initialActiveRide;
     _serverUrl =
         widget.apiService?.cleanBaseUrl ??
         widget.initialServerUrl ??
-        _envServerUrl;
+        AppPreferences.buildApiBaseUrl;
     if (widget.apiService == null) {
       _ownedApiService = RideApiService(baseUrl: _serverUrl);
     }
     if (widget.mapSearchService == null) {
       _ownedSearchService = MapSearchService();
-    }
-
-    // Only pre-load the mock active ride when explicitly running in offline demo mode.
-    if (!_apiService.isEnabled && widget.rideRepository.rides.isNotEmpty) {
-      final sample = widget.rideRepository.rides.first;
-      _activeRide = ActiveRide(
-        joinCode: sample.code,
-        destination: sample.destination,
-        isHost: true,
-        pickupLabel: 'F-6, Islamabad',
-        distanceKm: sample.distanceKm,
-        durationMinutes: 18,
-      );
     }
 
     if (widget.apiService == null && widget.initialServerUrl == null) {
@@ -110,7 +87,9 @@ class _MainScreenState extends State<MainScreen> {
         _riderName = savedName.trim();
         changed = true;
       }
-      if (savedUrl != null && savedUrl != _serverUrl) {
+      if (savedUrl != null &&
+          savedUrl.trim().isNotEmpty &&
+          savedUrl != _serverUrl) {
         _ownedApiService?.dispose();
         _ownedApiService = RideApiService(baseUrl: savedUrl);
         _serverUrl = _ownedApiService!.cleanBaseUrl;
@@ -218,12 +197,6 @@ class _MainScreenState extends State<MainScreen> {
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
-    final groupRiders =
-        (_apiService.isEnabled && _activeRide?.currentUserId != null)
-        ? _liveRiders
-        : (_apiService.isEnabled
-              ? const <RiderPosition>[]
-              : widget.riderRepository.positions);
 
     return Scaffold(
       // IndexedStack keeps each tab alive when switching (so the map keeps its position).
@@ -242,7 +215,6 @@ class _MainScreenState extends State<MainScreen> {
             onJoinRide: () => _openRideFlow(
               JoinRideScreen(apiService: _apiService, riderName: _riderName),
             ),
-            riderRepository: widget.riderRepository,
             locationService: widget.locationService,
             apiService: _apiService,
             searchService: _searchService,
@@ -260,17 +232,17 @@ class _MainScreenState extends State<MainScreen> {
             onJoinRide: () => _openRideFlow(
               JoinRideScreen(apiService: _apiService, riderName: _riderName),
             ),
-            rideRepository: widget.rideRepository,
           ),
-          GroupScreen(activeRide: _activeRide, riders: groupRiders),
+          GroupScreen(activeRide: _activeRide, riders: _liveRiders),
           ProfileScreen(
-            rideRepository: widget.rideRepository,
             themeMode: widget.themeMode,
             onThemeModeChanged: widget.onThemeModeChanged,
             riderName: _riderName,
             onRiderNameChanged: _updateRiderName,
             serverUrl: _serverUrl,
-            onServerUrlChanged: widget.apiService == null
+            onServerUrlChanged:
+                widget.apiService == null &&
+                    (kDebugMode || _serverUrl.trim().isEmpty)
                 ? _updateServerUrl
                 : null,
           ),

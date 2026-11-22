@@ -500,7 +500,7 @@ void main() {
     final serverTile = find.text('Backend server');
     await tester.drag(find.byType(ListView), const Offset(0, -300));
     await tester.pumpAndSettle();
-    expect(find.text('https://ridesync.ddns.net'), findsOneWidget);
+    expect(find.text('Not configured'), findsOneWidget);
 
     await tester.tap(serverTile);
     await tester.pumpAndSettle();
@@ -513,14 +513,14 @@ void main() {
 
     expect(find.text('http://127.0.0.1:8000'), findsOneWidget);
 
-    // Switching to Offline enables local mock preview cleanly.
+    // Switching to Emulator preset updates the URL cleanly.
     await tester.tap(find.text('Backend server'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Offline'));
+    await tester.tap(find.text('Emulator (10.0.2.2:8000)'));
     await tester.pump();
     await tester.tap(find.text('Save'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Offline preview (mock rides)'), findsOneWidget);
+    expect(find.text('http://10.0.2.2:8000'), findsOneWidget);
   });
 }

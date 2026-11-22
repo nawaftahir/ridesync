@@ -8,6 +8,7 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:ridesync/main.dart';
+import 'package:ridesync/models/active_ride.dart';
 import 'package:ridesync/screens/main_screen.dart';
 import 'package:ridesync/widgets/open_free_map_layer.dart';
 import 'package:vector_map_tiles/vector_map_tiles.dart';
@@ -349,7 +350,15 @@ void main() {
       });
 
       await tester.pumpWidget(
-        const MaterialApp(home: MainScreen(initialServerUrl: '')),
+        const MaterialApp(
+          home: MainScreen(
+            initialActiveRide: ActiveRide(
+              joinCode: 'MAP123',
+              destination: 'Daman-e-Koh, Islamabad',
+              isHost: true,
+            ),
+          ),
+        ),
       );
       await tester.pumpAndSettle();
 
@@ -399,7 +408,15 @@ void main() {
     'RideMapScreen bottom sheet supports vertical swipe to collapse and expand',
     (tester) async {
       await tester.pumpWidget(
-        const MaterialApp(home: MainScreen(initialServerUrl: '')),
+        const MaterialApp(
+          home: MainScreen(
+            initialActiveRide: ActiveRide(
+              joinCode: 'MAP123',
+              destination: 'Daman-e-Koh, Islamabad',
+              isHost: true,
+            ),
+          ),
+        ),
       );
       await tester.pumpAndSettle();
 

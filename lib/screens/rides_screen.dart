@@ -1,8 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:ridesync/models/active_ride.dart';
-import 'package:ridesync/repositories/ride_repository.dart';
 
-// Shows quick actions to host/join a ride and a list of past rides (mock data).
+// Shows quick actions to host/join a ride and the active ride shortcut.
 class RidesScreen extends StatelessWidget {
   const RidesScreen({
     super.key,
@@ -10,20 +9,17 @@ class RidesScreen extends StatelessWidget {
     required this.onOpenMap,
     required this.onHostRide,
     required this.onJoinRide,
-    this.rideRepository = const RideRepository(),
   });
 
   final ActiveRide? activeRide;
   final VoidCallback onOpenMap;
   final VoidCallback onHostRide;
   final VoidCallback onJoinRide;
-  final RideRepository rideRepository;
 
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     final text = Theme.of(context).textTheme;
-    final pastRides = rideRepository.pastRides;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Rides')),
@@ -79,31 +75,31 @@ class RidesScreen extends StatelessWidget {
           ),
           const SizedBox(height: 8),
 
-          for (final ride in pastRides)
-            Card(
-              child: ListTile(
-                leading: CircleAvatar(
-                  backgroundColor: colors.primaryContainer,
-                  foregroundColor: colors.onPrimaryContainer,
-                  child: const Icon(Icons.two_wheeler),
-                ),
-                title: Text(
-                  ride.destination,
-                  style: const TextStyle(fontWeight: FontWeight.w700),
-                ),
-                subtitle: Text(
-                  '${ride.dateLabel} · ${ride.durationMinutes} min · '
-                  '${ride.distanceKm} km',
-                ),
-                trailing: Text(
-                  '${ride.riderCount} riders',
-                  style: text.bodySmall?.copyWith(
-                    color: colors.onSurfaceVariant,
-                    fontWeight: FontWeight.w600,
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                children: [
+                  Icon(Icons.history, size: 40, color: colors.onSurfaceVariant),
+                  const SizedBox(height: 10),
+                  Text(
+                    'No past rides yet',
+                    style: text.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
-                ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Your completed rides will appear here once ride history sync is added.',
+                    textAlign: TextAlign.center,
+                    style: text.bodySmall?.copyWith(
+                      color: colors.onSurfaceVariant,
+                    ),
+                  ),
+                ],
               ),
             ),
+          ),
         ],
       ),
     );
