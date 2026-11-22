@@ -62,7 +62,7 @@ def _find_ride(cur, code: str) -> dict:
     """Look up a ride by join code (case-insensitive) or raise 404."""
     clean_code = code.strip().upper()
     cur.execute(
-        "SELECT id, code, destination, host_id, started_at, ended_at "
+        "SELECT id, code, destination, dest_lat, dest_lng, host_id, started_at, ended_at "
         "FROM rides WHERE code = %s",
         (clean_code,),
     )
@@ -101,8 +101,15 @@ def create_ride(
             candidate = _generate_code()
             try:
                 cur.execute(
-                    "INSERT INTO rides (code, destination, host_id) VALUES (%s, %s, %s)",
-                    (candidate, payload.destination, host_id),
+                    "INSERT INTO rides (code, destination, dest_lat, dest_lng, host_id) "
+                    "VALUES (%s, %s, %s, %s, %s)",
+                    (
+                        candidate,
+                        payload.destination,
+                        payload.dest_lat,
+                        payload.dest_lng,
+                        host_id,
+                    ),
                 )
                 code = candidate
                 ride_id = int(cur.lastrowid)
@@ -126,6 +133,8 @@ def create_ride(
     return CreateRideResponse(
         code=code,
         destination=payload.destination,
+        dest_lat=payload.dest_lat,
+        dest_lng=payload.dest_lng,
         host_id=host_id,
         host_name=host_name,
         started_at=row["started_at"],
@@ -152,6 +161,8 @@ def join_ride(
     return JoinRideResponse(
         code=str(ride["code"]),
         destination=str(ride["destination"]),
+        dest_lat=None if ride["dest_lat"] is None else float(ride["dest_lat"]),
+        dest_lng=None if ride["dest_lng"] is None else float(ride["dest_lng"]),
         user_id=user_id,
         name=name,
         is_host=user_id == int(ride["host_id"]),
@@ -246,6 +257,8 @@ def get_positions(code: str, conn=Depends(get_db)) -> RidePositionsResponse:
     return RidePositionsResponse(
         code=str(ride["code"]),
         destination=str(ride["destination"]),
+        dest_lat=None if ride["dest_lat"] is None else float(ride["dest_lat"]),
+        dest_lng=None if ride["dest_lng"] is None else float(ride["dest_lng"]),
         is_ended=ride["ended_at"] is not None,
         ended_at=ride["ended_at"],
         riders=riders,

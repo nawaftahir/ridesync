@@ -132,6 +132,12 @@ def init_db() -> str:
         with conn.cursor() as cur:
             for sql in read_table_sql():
                 cur.execute(sql)
+            # Safe migration for databases created before destination coordinates existed.
+            cur.execute(
+                "ALTER TABLE rides "
+                "ADD COLUMN IF NOT EXISTS dest_lat DOUBLE NULL AFTER destination, "
+                "ADD COLUMN IF NOT EXISTS dest_lng DOUBLE NULL AFTER dest_lat"
+            )
         conn.commit()
     except Exception:
         conn.rollback()

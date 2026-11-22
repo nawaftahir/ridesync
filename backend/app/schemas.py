@@ -15,6 +15,8 @@ class HealthResponse(_TrimmedModel):
 
 class CreateRideRequest(_TrimmedModel):
     destination: str = Field(min_length=1, max_length=255)
+    dest_lat: float | None = Field(default=None, ge=-90.0, le=90.0)
+    dest_lng: float | None = Field(default=None, ge=-180.0, le=180.0)
     host_name: str = Field(default="Rider", min_length=1, max_length=100)
     host_id: int | None = Field(default=None, gt=0)
 
@@ -22,6 +24,8 @@ class CreateRideRequest(_TrimmedModel):
 class CreateRideResponse(_TrimmedModel):
     code: str
     destination: str
+    dest_lat: float | None = None
+    dest_lng: float | None = None
     host_id: int
     host_name: str
     started_at: datetime
@@ -35,6 +39,8 @@ class JoinRideRequest(_TrimmedModel):
 class JoinRideResponse(_TrimmedModel):
     code: str
     destination: str
+    dest_lat: float | None = None
+    dest_lng: float | None = None
     user_id: int
     name: str
     is_host: bool
@@ -73,6 +79,8 @@ class RiderPositionOut(_TrimmedModel):
 class RidePositionsResponse(_TrimmedModel):
     code: str
     destination: str
+    dest_lat: float | None = None
+    dest_lng: float | None = None
     is_ended: bool
     ended_at: datetime | None
     riders: list[RiderPositionOut]

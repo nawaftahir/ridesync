@@ -97,8 +97,8 @@ Do this after Part 1 or 2 works. Replace `api.example.com` with your own domain 
 
 ```bash
 sudo apt update && sudo apt install -y python3-venv nginx certbot python3-certbot-nginx git
-sudo git clone <your-repo-url> /opt/ridesync
-cd /opt/ridesync/backend
+sudo git clone <your-repo-url> /srv/ridesync
+cd /srv/ridesync/backend
 sudo python3 -m venv .venv
 sudo .venv/bin/pip install -r requirements.txt
 sudo cp .env.example .env
@@ -121,8 +121,8 @@ Description=RideSync API
 After=network.target mariadb.service
 
 [Service]
-WorkingDirectory=/opt/ridesync/backend
-ExecStart=/opt/ridesync/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+WorkingDirectory=/srv/ridesync/backend
+ExecStart=/srv/ridesync/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
 Restart=always
 
 [Install]
@@ -188,7 +188,7 @@ It should answer `{"status":"ok","database":"connected"}`.
 **Updating later**
 
 ```bash
-cd /opt/ridesync && sudo git pull
+cd /srv/ridesync && sudo git pull
 sudo backend/.venv/bin/pip install -r backend/requirements.txt
 sudo systemctl restart ridesync
 ```

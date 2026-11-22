@@ -50,13 +50,13 @@ class FakeCursor:
             self.state.next_user_id += 1
             self.state.users[uid] = {"id": uid, "name": params[0]}
             self.lastrowid = uid
-        elif q.startswith("SELECT id, code, destination, host_id, started_at, ended_at FROM rides WHERE code ="):
+        elif q.startswith("SELECT id, code, destination, dest_lat, dest_lng, host_id, started_at, ended_at FROM rides WHERE code ="):
             for ride in self.state.rides.values():
                 if ride["code"] == params[0]:
                     self._rows = [dict(ride)]
                     break
         elif q.startswith("INSERT INTO rides"):
-            code, destination, host_id = params
+            code, destination, dest_lat, dest_lng, host_id = params
             if any(r["code"] == code for r in self.state.rides.values()):
                 raise pymysql.IntegrityError(1062, "Duplicate code")
             rid = self.state.next_ride_id
@@ -65,6 +65,8 @@ class FakeCursor:
                 "id": rid,
                 "code": code,
                 "destination": destination,
+                "dest_lat": dest_lat,
+                "dest_lng": dest_lng,
                 "host_id": host_id,
                 "started_at": self.state.now,
                 "ended_at": None,
@@ -172,19 +174,28 @@ def test_ride_lifecycle_and_position_upsert() -> None:
 
         created = client.post(
             "/rides",
-            json={"destination": "Daman-e-Koh, Islamabad", "host_name": "Nawaf"},
+            json={
+                "destination": "Daman-e-Koh, Islamabad",
+                "dest_lat": 33.7394,
+                "dest_lng": 73.0558,
+                "host_name": "Nawaf",
+            },
         )
         assert created.status_code == 201
         ride = created.json()
         code = ride["code"]
         host_id = ride["host_id"]
         assert len(code) == 6
+        assert ride["dest_lat"] == 33.7394
+        assert ride["dest_lng"] == 73.0558
 
         joined = client.post(f"/rides/{code.lower()}/join", json={"name": "Bilal"})
         assert joined.status_code == 200
         bilal = joined.json()
         assert bilal["code"] == code
         assert bilal["is_host"] is False
+        assert bilal["dest_lat"] == 33.7394
+        assert bilal["dest_lng"] == 73.0558
         rider_id = bilal["user_id"]
 
         client.post(
