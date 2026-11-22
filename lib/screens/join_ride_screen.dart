@@ -2,19 +2,41 @@ import 'package:flutter/material.dart';
 import 'package:ridesync/services/ride_api_service.dart';
 
 class JoinRideScreen extends StatefulWidget {
-  const JoinRideScreen({super.key, this.apiService, this.riderName = 'Nawaf'});
+  const JoinRideScreen({
+    super.key,
+    this.apiService,
+    this.riderName = 'Nawaf',
+    this.initialCode,
+    this.autoJoin = false,
+  });
 
   final RideApiService? apiService;
   final String riderName;
+  final String? initialCode;
+  final bool autoJoin;
 
   @override
   State<JoinRideScreen> createState() => _JoinRideScreenState();
 }
 
 class _JoinRideScreenState extends State<JoinRideScreen> {
-  final _codeController = TextEditingController();
+  late final TextEditingController _codeController = TextEditingController(
+    text: (widget.initialCode ?? '').trim().toUpperCase(),
+  );
   String? _errorMessage;
   bool _isLoading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.autoJoin && _codeController.text.isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _onJoinTapped();
+        }
+      });
+    }
+  }
 
   Future<void> _onJoinTapped() async {
     final code = _codeController.text.trim().toUpperCase();

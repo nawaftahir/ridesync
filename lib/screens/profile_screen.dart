@@ -331,6 +331,9 @@ class _ServerConfigDialogState extends State<_ServerConfigDialog> {
             TextField(
               controller: _controller,
               keyboardType: TextInputType.url,
+              textCapitalization: TextCapitalization.none,
+              autocorrect: false,
+              enableSuggestions: false,
               decoration: const InputDecoration(
                 hintText: 'https://api.example.com',
                 labelText: 'Server URL',

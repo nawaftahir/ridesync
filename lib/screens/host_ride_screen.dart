@@ -193,6 +193,7 @@ class _HostRideScreenState extends State<HostRideScreen> {
     await shareRideInvite(
       code: code,
       destination: destination,
+      serverBaseUrl: widget.apiService?.cleanBaseUrl,
       onShareOverride: widget.onShareOverride,
     );
   }

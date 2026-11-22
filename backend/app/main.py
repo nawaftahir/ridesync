@@ -1,6 +1,9 @@
+import html
+import os
+import re
 import secrets
 from fastapi import Depends, FastAPI, HTTPException, Request, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 import pymysql
 
 from app.db import get_db, get_db_status
@@ -80,6 +83,82 @@ def read_root() -> dict[str, str]:
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     return HealthResponse(status="ok", database=get_db_status())
+
+
+@app.get("/.well-known/assetlinks.json")
+def android_asset_links() -> list[dict]:
+    """Android App Links verification file populated from server env vars."""
+    raw_fingerprints = os.getenv("ANDROID_APP_SHA256", "")
+    fingerprints = [
+        item.strip().upper()
+        for item in raw_fingerprints.split(",")
+        if item.strip()
+    ]
+    if not fingerprints:
+        return []
+    package_name = os.getenv("ANDROID_APP_PACKAGE", "com.example.ridesync").strip()
+    return [
+        {
+            "relation": ["delegate_permission/common.handle_all_urls"],
+            "target": {
+                "namespace": "android_app",
+                "package_name": package_name,
+                "sha256_cert_fingerprints": fingerprints,
+            },
+        }
+    ]
+
+
+@app.get("/join/{code}", response_class=HTMLResponse)
+def join_link_page(code: str) -> HTMLResponse:
+    """Clickable HTTPS invite page that opens the RideSync app via App Link / intent."""
+    clean_code = code.strip().upper()
+    if not re.fullmatch(r"[A-Z0-9]{4,10}", clean_code):
+        raise HTTPException(status_code=400, detail="Invalid ride code")
+
+    safe_code = html.escape(clean_code)
+    package_name = html.escape(
+        os.getenv("ANDROID_APP_PACKAGE", "com.example.ridesync").strip()
+    )
+    deep_link = f"ridesync://join/{safe_code}"
+    android_intent_link = (
+        f"intent://join/{safe_code}#Intent;scheme=ridesync;package={package_name};end"
+    )
+    page = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Join RideSync Convoy ({safe_code})</title>
+  <meta property="og:title" content="Join RideSync Convoy ({safe_code})">
+  <meta property="og:description" content="Tap to join this live motorcycle convoy in RideSync.">
+  <meta property="og:type" content="website">
+  <style>
+    body {{ font-family: system-ui, -apple-system, sans-serif; background: #0f172a; color: #f8fafc;
+            display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 20px; }}
+    .card {{ background: #1e293b; border-radius: 20px; padding: 28px; max-width: 360px; width: 100%; text-align: center; }}
+    .code {{ font-size: 32px; font-weight: 800; letter-spacing: 6px; margin: 16px 0; color: #38bdf8; }}
+    .btn {{ display: inline-block; background: #0ea5e9; color: #0f172a; font-weight: 700; text-decoration: none;
+            padding: 14px 24px; border-radius: 14px; margin-top: 8px; }}
+    p {{ color: #cbd5e1; line-height: 1.5; }}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Join RideSync Convoy</h1>
+    <p>Tap below to open this ride directly in the RideSync app, or enter this code manually:</p>
+    <div class="code">{safe_code}</div>
+    <a id="open-btn" class="btn" href="{deep_link}">Open in RideSync</a>
+  </div>
+  <script>
+    const isAndroid = /Android/i.test(navigator.userAgent);
+    const targetUrl = isAndroid ? "{android_intent_link}" : "{deep_link}";
+    document.getElementById("open-btn").href = targetUrl;
+    window.location.href = targetUrl;
+  </script>
+</body>
+</html>"""
+    return HTMLResponse(content=page)
 
 
 @app.post(

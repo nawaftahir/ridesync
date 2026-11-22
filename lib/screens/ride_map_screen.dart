@@ -846,6 +846,7 @@ class _RideMapScreenState extends State<RideMapScreen>
                       : () => shareRideInvite(
                           code: ride.joinCode,
                           destination: ride.destination,
+                          serverBaseUrl: widget.apiService?.cleanBaseUrl,
                           onShareOverride: widget.onShareOverride,
                         ),
                 ),

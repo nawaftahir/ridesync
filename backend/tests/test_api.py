@@ -165,6 +165,19 @@ def test_root_and_health_endpoints(monkeypatch) -> None:
     assert health.status_code == 200
     assert health.json() == {"status": "ok", "database": "not_configured"}
 
+    invite = client.get("/join/k7mpqw")
+    assert invite.status_code == 200
+    assert "ridesync://join/K7MPQW" in invite.text
+    assert "intent://join/K7MPQW" in invite.text
+    assert client.get("/join/bad!code").status_code == 400
+
+    monkeypatch.delenv("ANDROID_APP_SHA256", raising=False)
+    assert client.get("/.well-known/assetlinks.json").json() == []
+    monkeypatch.setenv("ANDROID_APP_SHA256", "aa:bb:cc")
+    links = client.get("/.well-known/assetlinks.json")
+    assert links.status_code == 200
+    assert links.json()[0]["target"]["sha256_cert_fingerprints"] == ["AA:BB:CC"]
+
 
 def test_ride_lifecycle_and_position_upsert() -> None:
     state = FakeDbState()

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart';
@@ -10,15 +12,18 @@ import 'package:ridesync/screens/profile_screen.dart';
 import 'package:ridesync/screens/ride_map_screen.dart';
 import 'package:ridesync/screens/rides_screen.dart';
 import 'package:ridesync/services/app_preferences.dart';
+import 'package:ridesync/services/deep_link_service.dart';
 import 'package:ridesync/services/location_service.dart';
 import 'package:ridesync/services/map_search_service.dart';
 import 'package:ridesync/services/ride_api_service.dart';
+import 'package:ridesync/utils/ride_share.dart';
 
 // Main app shell holding the 4-tab bottom bar and the active ride state.
 class MainScreen extends StatefulWidget {
   const MainScreen({
     super.key,
     this.locationService = const LocationService(),
+    this.deepLinkService = const DeepLinkService(),
     this.apiService,
     this.mapSearchService,
     this.initialServerUrl,
@@ -28,6 +33,7 @@ class MainScreen extends StatefulWidget {
   });
 
   final LocationService locationService;
+  final DeepLinkService deepLinkService;
   final RideApiService? apiService;
   final MapSearchService? mapSearchService;
   final String? initialServerUrl;
@@ -49,6 +55,8 @@ class _MainScreenState extends State<MainScreen> {
   late String _serverUrl;
   RideApiService? _ownedApiService;
   MapSearchService? _ownedSearchService;
+  StreamSubscription<Uri>? _deepLinkSub;
+  bool _isHandlingDeepLink = false;
 
   RideApiService get _apiService => widget.apiService ?? _ownedApiService!;
   MapSearchService get _searchService =>
@@ -69,8 +77,45 @@ class _MainScreenState extends State<MainScreen> {
       _ownedSearchService = MapSearchService();
     }
 
+    _listenDeepLinks();
     if (widget.apiService == null && widget.initialServerUrl == null) {
       _loadSavedSettings();
+    }
+  }
+
+  void _listenDeepLinks() {
+    widget.deepLinkService.getInitialUri().then((uri) {
+      if (mounted && uri != null) {
+        _handleIncomingUri(uri);
+      }
+    });
+    _deepLinkSub = widget.deepLinkService.uriStream().listen((uri) {
+      if (mounted) {
+        _handleIncomingUri(uri);
+      }
+    }, onError: (_) {});
+  }
+
+  Future<void> _handleIncomingUri(Uri uri) async {
+    final code = parseRideCodeFromUri(uri);
+    if (code == null || _isHandlingDeepLink) return;
+    if (_activeRide?.joinCode == code) {
+      setState(() => _selectedIndex = 0);
+      return;
+    }
+
+    _isHandlingDeepLink = true;
+    try {
+      await _openRideFlow(
+        JoinRideScreen(
+          apiService: _apiService,
+          riderName: _riderName,
+          initialCode: code,
+          autoJoin: true,
+        ),
+      );
+    } finally {
+      _isHandlingDeepLink = false;
     }
   }
 
@@ -105,6 +150,7 @@ class _MainScreenState extends State<MainScreen> {
 
   @override
   void dispose() {
+    _deepLinkSub?.cancel();
     _ownedApiService?.dispose();
     _ownedSearchService?.dispose();
     super.dispose();
