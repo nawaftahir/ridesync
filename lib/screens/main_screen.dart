@@ -12,6 +12,7 @@ import 'package:ridesync/screens/profile_screen.dart';
 import 'package:ridesync/screens/ride_map_screen.dart';
 import 'package:ridesync/screens/rides_screen.dart';
 import 'package:ridesync/services/app_preferences.dart';
+import 'package:ridesync/services/battery_service.dart';
 import 'package:ridesync/services/deep_link_service.dart';
 import 'package:ridesync/services/location_service.dart';
 import 'package:ridesync/services/map_search_service.dart';
@@ -23,6 +24,7 @@ class MainScreen extends StatefulWidget {
   const MainScreen({
     super.key,
     this.locationService = const LocationService(),
+    this.batteryService = const BatteryService(),
     this.deepLinkService = const DeepLinkService(),
     this.apiService,
     this.mapSearchService,
@@ -33,6 +35,7 @@ class MainScreen extends StatefulWidget {
   });
 
   final LocationService locationService;
+  final BatteryService batteryService;
   final DeepLinkService deepLinkService;
   final RideApiService? apiService;
   final MapSearchService? mapSearchService;
@@ -80,7 +83,17 @@ class _MainScreenState extends State<MainScreen> {
     _listenDeepLinks();
     if (widget.apiService == null && widget.initialServerUrl == null) {
       _loadSavedSettings();
+    } else if (widget.initialActiveRide == null) {
+      _restoreSavedRideOnly();
     }
+  }
+
+  Future<void> _restoreSavedRideOnly() async {
+    final savedRide = await _prefs.loadActiveRide();
+    if (!mounted || savedRide == null || _activeRide != null) return;
+    setState(() {
+      _activeRide = savedRide;
+    });
   }
 
   void _listenDeepLinks() {
@@ -123,6 +136,9 @@ class _MainScreenState extends State<MainScreen> {
     try {
       final savedUrl = await _prefs.loadServerUrl();
       final savedName = await _prefs.loadRiderName();
+      final savedRide = widget.initialActiveRide == null
+          ? await _prefs.loadActiveRide()
+          : null;
       if (!mounted) return;
 
       var changed = false;
@@ -138,6 +154,10 @@ class _MainScreenState extends State<MainScreen> {
         _ownedApiService?.dispose();
         _ownedApiService = RideApiService(baseUrl: savedUrl);
         _serverUrl = _ownedApiService!.cleanBaseUrl;
+        changed = true;
+      }
+      if (savedRide != null && _activeRide == null) {
+        _activeRide = savedRide;
         changed = true;
       }
       if (changed) {
@@ -188,6 +208,7 @@ class _MainScreenState extends State<MainScreen> {
       _liveRiders = const [];
       _selectedIndex = 0;
     });
+    _prefs.saveActiveRide(ride).catchError((_) {});
   }
 
   Future<void> _openHostRide({
@@ -213,6 +234,7 @@ class _MainScreenState extends State<MainScreen> {
       _activeRide = null;
       _liveRiders = const [];
     });
+    _prefs.clearActiveRide().catchError((_) {});
 
     if (ending != null &&
         ending.isHost &&
@@ -262,6 +284,7 @@ class _MainScreenState extends State<MainScreen> {
               JoinRideScreen(apiService: _apiService, riderName: _riderName),
             ),
             locationService: widget.locationService,
+            batteryService: widget.batteryService,
             apiService: _apiService,
             searchService: _searchService,
             onRidersUpdated: (riders) {

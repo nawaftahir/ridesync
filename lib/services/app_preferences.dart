@@ -1,14 +1,16 @@
 import 'dart:convert';
 
+import 'package:ridesync/models/active_ride.dart';
 import 'package:ridesync/services/map_search_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-// Saves simple rider settings (display name, backend URL, and recent searches)
-// locally on the phone.
+// Saves simple rider settings (display name, backend URL, recent searches,
+// and active ride state) locally on the phone.
 class AppPreferences {
   static const String _serverUrlKey = 'server_url';
   static const String _riderNameKey = 'rider_name';
   static const String _recentPlacesKey = 'recent_places';
+  static const String _activeRideKey = 'active_ride';
   static const int _maxRecentPlaces = 8;
 
   // Injected at build time via `--dart-define=API_BASE_URL=...`
@@ -83,6 +85,37 @@ class AppPreferences {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove(_recentPlacesKey);
+    } catch (_) {
+      // Ignore storage failures.
+    }
+  }
+
+  Future<ActiveRide?> loadActiveRide() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_activeRideKey);
+      if (raw == null || raw.isEmpty) return null;
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map<String, dynamic>) return null;
+      return ActiveRide.fromJson(decoded);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> saveActiveRide(ActiveRide ride) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_activeRideKey, jsonEncode(ride.toJson()));
+    } catch (_) {
+      // Ignore storage failures on unsupported platforms / headless tests.
+    }
+  }
+
+  Future<void> clearActiveRide() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_activeRideKey);
     } catch (_) {
       // Ignore storage failures.
     }

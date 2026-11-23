@@ -8,6 +8,7 @@ import 'package:ridesync/models/active_ride.dart';
 import 'package:ridesync/models/rider.dart';
 import 'package:ridesync/models/rider_position.dart';
 import 'package:ridesync/screens/convoy_screen.dart';
+import 'package:ridesync/services/battery_service.dart';
 import 'package:ridesync/services/location_service.dart';
 import 'package:ridesync/services/map_search_service.dart';
 import 'package:ridesync/services/ride_api_service.dart';
@@ -38,6 +39,7 @@ class RideMapScreen extends StatefulWidget {
     required this.onJoinRide,
     this.onHostRideWithPlace,
     this.locationService = const LocationService(),
+    this.batteryService = const BatteryService(),
     this.apiService,
     this.searchService,
     this.onRidersUpdated,
@@ -51,6 +53,7 @@ class RideMapScreen extends StatefulWidget {
   final void Function(PlaceResult place, RoutePreview? route, LatLng? near)?
   onHostRideWithPlace;
   final LocationService locationService;
+  final BatteryService batteryService;
   final RideApiService? apiService;
   final MapSearchService? searchService;
   final ValueChanged<List<RiderPosition>>? onRidersUpdated;
@@ -69,10 +72,14 @@ class _RideMapScreenState extends State<RideMapScreen>
   Timer? _syncTimer;
   LocationStatus _locationStatus = LocationStatus.checking;
   GpsFix? _myFix;
+  int? _myBatteryPercent;
+  DateTime? _lastBatteryCheckedAt;
   List<RiderPosition> _liveRiders = const [];
   DateTime? _lastPositionSentAt;
+  LatLng? _lastPositionSentPoint;
   bool _isSendingPosition = false;
   bool _isFetchingPositions = false;
+  bool _pausedIdleGps = false;
   bool _followMe = true;
   bool _hasInitialGpsCenter = false;
   bool _isSheetCollapsed = false;
@@ -115,6 +122,7 @@ class _RideMapScreenState extends State<RideMapScreen>
     _listenServiceStatus();
     _startLocationTracking();
     if (_isLiveBackendRide) {
+      unawaited(_refreshBatteryPercent());
       _startBackendSync();
     }
     if (widget.activeRide != null) {
@@ -135,6 +143,7 @@ class _RideMapScreenState extends State<RideMapScreen>
     _stopBackendSync();
     _liveRiders = const [];
     _lastPositionSentAt = null;
+    _lastPositionSentPoint = null;
     _remoteDestPoint = null;
     _activeRoute = null;
     _lastRoutedOrigin = null;
@@ -177,6 +186,23 @@ class _RideMapScreenState extends State<RideMapScreen>
     _syncTimer = null;
   }
 
+  Future<void> _refreshBatteryPercent() async {
+    final now = DateTime.now();
+    // Battery % changes slowly; polling at most once per minute keeps overhead ~0.
+    if (_lastBatteryCheckedAt != null &&
+        now.difference(_lastBatteryCheckedAt!) < const Duration(seconds: 60)) {
+      return;
+    }
+    _lastBatteryCheckedAt = now;
+    final percent = await widget.batteryService.getBatteryPercent();
+    if (percent == null) return;
+    if (mounted && percent != _myBatteryPercent) {
+      setState(() => _myBatteryPercent = percent);
+    } else {
+      _myBatteryPercent = percent;
+    }
+  }
+
   Future<void> _sendPositionIfNeeded(GpsFix fix) async {
     final api = widget.apiService;
     final ride = widget.activeRide;
@@ -186,13 +212,33 @@ class _RideMapScreenState extends State<RideMapScreen>
     }
     if (_isSendingPosition) return;
     final now = DateTime.now();
-    if (_lastPositionSentAt != null &&
-        now.difference(_lastPositionSentAt!) < const Duration(seconds: 2)) {
-      return;
+    if (_lastPositionSentAt != null) {
+      final movedMeters = _lastPositionSentPoint == null
+          ? double.infinity
+          : const Distance().as(
+              LengthUnit.Meter,
+              _lastPositionSentPoint!,
+              fix.point,
+            );
+      // Save radio battery when stationary (15s heartbeat) while staying smooth
+      // when moving (3s updates).
+      final isMoving = fix.speedKmh >= 5.0 || movedMeters >= 8.0;
+      final minInterval = isMoving
+          ? const Duration(seconds: 3)
+          : const Duration(seconds: 15);
+      if (now.difference(_lastPositionSentAt!) < minInterval) {
+        return;
+      }
     }
 
     _isSendingPosition = true;
     _lastPositionSentAt = now;
+    _lastPositionSentPoint = fix.point;
+    if (_myBatteryPercent == null) {
+      await _refreshBatteryPercent();
+    } else {
+      unawaited(_refreshBatteryPercent());
+    }
     try {
       await api.sendPosition(
         code: ride.joinCode,
@@ -200,6 +246,7 @@ class _RideMapScreenState extends State<RideMapScreen>
         latitude: fix.point.latitude,
         longitude: fix.point.longitude,
         speedKmh: fix.speedKmh,
+        batteryPercent: _myBatteryPercent,
       );
     } on RideApiException {
       // Ignore temporary network blips so GPS tracking keeps running smoothly.
@@ -283,10 +330,28 @@ class _RideMapScreenState extends State<RideMapScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden) {
+      // Pause periodic network polling when backgrounded to save radio battery.
+      _stopBackendSync();
+      // Pause GPS when idle in the background so it doesn't drain battery.
+      if (widget.activeRide == null && _positionSub != null) {
+        _positionSub?.cancel();
+        _positionSub = null;
+        _pausedIdleGps = true;
+      }
+      return;
+    }
     if (state != AppLifecycleState.resumed) return;
-    // Re-check automatically when the user returns from phone Settings.
-    if (_locationStatus == LocationStatus.deniedForever ||
+
+    if (_isLiveBackendRide) {
+      _startBackendSync();
+    }
+    // Re-check automatically when returning from phone Settings or background.
+    if (_pausedIdleGps ||
+        _locationStatus == LocationStatus.deniedForever ||
         _locationStatus == LocationStatus.serviceDisabled) {
+      _pausedIdleGps = false;
       _startLocationTracking();
     }
     // Retry loading map tiles if the app was launched offline.
@@ -688,7 +753,7 @@ class _RideMapScreenState extends State<RideMapScreen>
             longitude: fix.point.longitude,
             speedKmh: fix.speedKmh,
             headingDegrees: pos.headingDegrees,
-            batteryPercent: pos.batteryPercent,
+            batteryPercent: _myBatteryPercent ?? pos.batteryPercent,
             ageSeconds: 0,
           ),
         );
@@ -706,7 +771,7 @@ class _RideMapScreenState extends State<RideMapScreen>
           longitude: fix.point.longitude,
           speedKmh: fix.speedKmh,
           headingDegrees: 0,
-          batteryPercent: null,
+          batteryPercent: _myBatteryPercent,
           ageSeconds: 0,
         ),
       );
@@ -714,12 +779,48 @@ class _RideMapScreenState extends State<RideMapScreen>
     return merged;
   }
 
-  void _openConvoy() {
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => ConvoyScreen(riders: _effectivePositions()),
+  void _fitAllRiders() {
+    final points = <LatLng>[
+      for (final pos in _effectivePositions()) pos.point,
+      ?_activeDestPoint,
+    ];
+    if (points.isEmpty) return;
+    setState(() => _followMe = false);
+    _fitCameraToPoints(points);
+  }
+
+  void _focusRiderOnMap(RiderPosition position) {
+    final controller = _mapController;
+    setState(() => _followMe = false);
+    if (controller == null) return;
+    unawaited(
+      controller.animateCamera(
+        CameraUpdate.position(
+          center: _toGeographic(position.point),
+          zoom: _kStreetZoom,
+        ),
+        animation: const CameraAnimation.ease(
+          duration: Duration(milliseconds: 400),
+        ),
       ),
     );
+  }
+
+  Future<void> _openConvoy() async {
+    final ride = widget.activeRide;
+    final focused = await Navigator.of(context).push<RiderPosition>(
+      MaterialPageRoute(
+        builder: (_) => ConvoyScreen(
+          riders: _effectivePositions(),
+          currentUserId: ride?.currentUserId ?? 0,
+          myPoint: _myFix?.point,
+          rideCode: ride?.joinCode,
+          destination: ride?.destination,
+        ),
+      ),
+    );
+    if (!mounted || focused == null) return;
+    _focusRiderOnMap(focused);
   }
 
   Marker _buildRiderMarker(
@@ -1064,7 +1165,34 @@ class _RideMapScreenState extends State<RideMapScreen>
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      _SpeedPill(speedKmh: _myFix?.speedKmh),
+                      Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _SpeedPill(speedKmh: _myFix?.speedKmh),
+                          if (ride != null) ...[
+                            const SizedBox(height: 8),
+                            Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                _MapActionButton(
+                                  icon: Icons.fit_screen_outlined,
+                                  iconColor: colors.onSurface,
+                                  tooltip: 'Fit all riders',
+                                  onPressed: _fitAllRiders,
+                                ),
+                                const SizedBox(width: 8),
+                                _MapActionButton(
+                                  icon: Icons.people_outline,
+                                  iconColor: colors.primary,
+                                  tooltip: 'Convoy riders',
+                                  onPressed: _openConvoy,
+                                ),
+                              ],
+                            ),
+                          ],
+                        ],
+                      ),
                       Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
@@ -1104,15 +1232,6 @@ class _RideMapScreenState extends State<RideMapScreen>
                             tooltip: 'Zoom out',
                             onPressed: () => _zoomBy(-1),
                           ),
-                          if (ride != null) ...[
-                            const SizedBox(height: 8),
-                            _MapActionButton(
-                              icon: Icons.people_outline,
-                              iconColor: colors.primary,
-                              tooltip: 'Convoy riders',
-                              onPressed: _openConvoy,
-                            ),
-                          ],
                         ],
                       ),
                     ],
