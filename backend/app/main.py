@@ -16,9 +16,11 @@ from app.schemas import (
     JoinRideRequest,
     JoinRideResponse,
     PositionUpdatedResponse,
+    RideAlertOut,
     RidePositionsResponse,
     RiderPositionOut,
     RiderSummary,
+    SendAlertRequest,
     UpdatePositionRequest,
 )
 
@@ -272,12 +274,13 @@ def update_position(
         # Keep only one row per rider in this ride by updating on duplicate key.
         cur.execute(
             "INSERT INTO positions "
-            "(ride_id, user_id, latitude, longitude, speed, battery, updated_at) "
-            "VALUES (%s, %s, %s, %s, %s, %s, NOW()) "
+            "(ride_id, user_id, latitude, longitude, speed, heading, battery, updated_at) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, NOW()) "
             "ON DUPLICATE KEY UPDATE "
             "latitude = VALUES(latitude), "
             "longitude = VALUES(longitude), "
             "speed = VALUES(speed), "
+            "heading = VALUES(heading), "
             "battery = VALUES(battery), "
             "updated_at = NOW()",
             (
@@ -286,6 +289,7 @@ def update_position(
                 payload.latitude,
                 payload.longitude,
                 payload.speed_kmh,
+                payload.heading_degrees,
                 payload.battery_percent,
             ),
         )
@@ -302,13 +306,64 @@ def update_position(
     )
 
 
+@app.post("/rides/{code}/alert", response_model=RideAlertOut, status_code=status.HTTP_201_CREATED)
+def send_alert(
+    code: str, payload: SendAlertRequest, conn=Depends(get_db)
+) -> RideAlertOut:
+    default_labels = {
+        "fuel": "Needs a fuel stop",
+        "wait": "Wait up!",
+        "help": "Needs help!",
+    }
+    message = payload.message.strip() or default_labels[payload.alert_type]
+
+    with conn.cursor() as cur:
+        ride = _find_ride(cur, code)
+        if ride["ended_at"] is not None:
+            raise HTTPException(
+                status_code=409, detail=f"Ride '{ride['code']}' has already ended"
+            )
+
+        cur.execute(
+            "SELECT u.name FROM ride_members rm "
+            "INNER JOIN users u ON u.id = rm.user_id "
+            "WHERE rm.ride_id = %s AND rm.user_id = %s",
+            (ride["id"], payload.user_id),
+        )
+        member = cur.fetchone()
+        if member is None:
+            raise HTTPException(
+                status_code=403,
+                detail=f"User {payload.user_id} is not a member of ride '{ride['code']}'",
+            )
+
+        cur.execute(
+            "INSERT INTO ride_alerts (ride_id, user_id, alert_type, message) "
+            "VALUES (%s, %s, %s, %s)",
+            (ride["id"], payload.user_id, payload.alert_type, message),
+        )
+        alert_id = int(cur.lastrowid)
+        cur.execute("SELECT created_at FROM ride_alerts WHERE id = %s", (alert_id,))
+        row = cur.fetchone()
+
+    return RideAlertOut(
+        id=alert_id,
+        user_id=payload.user_id,
+        sender_name=str(member["name"]),
+        alert_type=payload.alert_type,
+        message=message,
+        age_seconds=0,
+        created_at=row["created_at"],
+    )
+
+
 @app.get("/rides/{code}/positions", response_model=RidePositionsResponse)
 def get_positions(code: str, conn=Depends(get_db)) -> RidePositionsResponse:
     with conn.cursor() as cur:
         ride = _find_ride(cur, code)
         cur.execute(
             "SELECT u.id AS user_id, u.name, p.latitude, p.longitude, "
-            "p.speed, p.battery, p.updated_at, "
+            "p.speed, p.heading, p.battery, p.updated_at, "
             "GREATEST(0, TIMESTAMPDIFF(SECOND, p.updated_at, NOW())) AS age_seconds "
             "FROM positions p "
             "INNER JOIN users u ON u.id = p.user_id "
@@ -317,6 +372,17 @@ def get_positions(code: str, conn=Depends(get_db)) -> RidePositionsResponse:
             (ride["id"],),
         )
         rows = cur.fetchall()
+        cur.execute(
+            "SELECT a.id, a.user_id, u.name AS sender_name, a.alert_type, "
+            "a.message, a.created_at, "
+            "GREATEST(0, TIMESTAMPDIFF(SECOND, a.created_at, NOW())) AS age_seconds "
+            "FROM ride_alerts a "
+            "INNER JOIN users u ON u.id = a.user_id "
+            "WHERE a.ride_id = %s AND a.created_at >= DATE_SUB(NOW(), INTERVAL 5 MINUTE) "
+            "ORDER BY a.id DESC LIMIT 1",
+            (ride["id"],),
+        )
+        alert_row = cur.fetchone()
 
     riders = [
         RiderPositionOut(
@@ -324,6 +390,7 @@ def get_positions(code: str, conn=Depends(get_db)) -> RidePositionsResponse:
             latitude=float(row["latitude"]),
             longitude=float(row["longitude"]),
             speed_kmh=float(row["speed"]),
+            heading_degrees=float(row["heading"]),
             battery_percent=(
                 None if row["battery"] is None else int(row["battery"])
             ),
@@ -333,6 +400,19 @@ def get_positions(code: str, conn=Depends(get_db)) -> RidePositionsResponse:
         )
         for row in rows
     ]
+    latest_alert = (
+        None
+        if alert_row is None
+        else RideAlertOut(
+            id=int(alert_row["id"]),
+            user_id=int(alert_row["user_id"]),
+            sender_name=str(alert_row["sender_name"]),
+            alert_type=str(alert_row["alert_type"]),
+            message=str(alert_row["message"]),
+            age_seconds=int(alert_row["age_seconds"]),
+            created_at=alert_row["created_at"],
+        )
+    )
     return RidePositionsResponse(
         code=str(ride["code"]),
         destination=str(ride["destination"]),
@@ -341,6 +421,7 @@ def get_positions(code: str, conn=Depends(get_db)) -> RidePositionsResponse:
         is_ended=ride["ended_at"] is not None,
         ended_at=ride["ended_at"],
         riders=riders,
+        latest_alert=latest_alert,
     )
 
 

@@ -138,6 +138,11 @@ def init_db() -> str:
                 "ADD COLUMN IF NOT EXISTS dest_lat DOUBLE NULL AFTER destination, "
                 "ADD COLUMN IF NOT EXISTS dest_lng DOUBLE NULL AFTER dest_lat"
             )
+            # Safe migration for databases created before rider heading existed.
+            cur.execute(
+                "ALTER TABLE positions "
+                "ADD COLUMN IF NOT EXISTS heading DOUBLE NOT NULL DEFAULT 0 AFTER speed"
+            )
         conn.commit()
     except Exception:
         conn.rollback()

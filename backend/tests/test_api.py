@@ -21,6 +21,8 @@ class FakeDbState:
         self.rides: dict[int, dict] = {}
         self.members: set[tuple[int, int]] = set()
         self.positions: dict[tuple[int, int], dict] = {}
+        self.alerts: list[dict] = []
+        self.next_alert_id = 1
 
 
 class FakeCursor:
@@ -81,19 +83,60 @@ class FakeCursor:
             if (params[0], params[1]) in self.state.members:
                 self._rows = [{"1": 1}]
         elif q.startswith("INSERT INTO positions"):
-            ride_id, user_id, lat, lng, speed, battery = params
+            ride_id, user_id, lat, lng, speed, heading, battery = params
             self.state.positions[(ride_id, user_id)] = {
                 "ride_id": ride_id,
                 "user_id": user_id,
                 "latitude": lat,
                 "longitude": lng,
                 "speed": speed,
+                "heading": heading,
                 "battery": battery,
                 "updated_at": self.state.now,
             }
         elif q.startswith("SELECT updated_at FROM positions"):
             pos = self.state.positions[(params[0], params[1])]
             self._rows = [{"updated_at": pos["updated_at"]}]
+        elif q.startswith("SELECT u.name FROM ride_members"):
+            if (params[0], params[1]) in self.state.members:
+                user = self.state.users.get(params[1])
+                if user:
+                    self._rows = [{"name": user["name"]}]
+        elif q.startswith("INSERT INTO ride_alerts"):
+            aid = self.state.next_alert_id
+            self.state.next_alert_id += 1
+            self.state.alerts.append(
+                {
+                    "id": aid,
+                    "ride_id": params[0],
+                    "user_id": params[1],
+                    "alert_type": params[2],
+                    "message": params[3],
+                    "created_at": self.state.now,
+                }
+            )
+            self.lastrowid = aid
+        elif q.startswith("SELECT created_at FROM ride_alerts"):
+            alert = next(a for a in self.state.alerts if a["id"] == params[0])
+            self._rows = [{"created_at": alert["created_at"]}]
+        elif q.startswith("SELECT a.id, a.user_id"):
+            ride_id = params[0]
+            matching = [a for a in self.state.alerts if a["ride_id"] == ride_id]
+            if matching:
+                latest = matching[-1]
+                age = max(0, int((self.state.now - latest["created_at"]).total_seconds()))
+                if age <= 300:
+                    self._rows = [
+                        {
+                            "id": latest["id"],
+                            "user_id": latest["user_id"],
+                            "sender_name": self.state.users[latest["user_id"]]["name"],
+                            "alert_type": latest["alert_type"],
+                            "message": latest["message"],
+                            "created_at": latest["created_at"],
+                            "age_seconds": age,
+                        }
+                    ]
         elif q.startswith("SELECT u.id AS user_id"):
             ride_id = params[0]
             rows = []
@@ -108,6 +151,7 @@ class FakeCursor:
                         "latitude": pos["latitude"],
                         "longitude": pos["longitude"],
                         "speed": pos["speed"],
+                        "heading": pos["heading"],
                         "battery": pos["battery"],
                         "updated_at": pos["updated_at"],
                         "age_seconds": age,
@@ -144,11 +188,11 @@ def _use_fake_db(state: FakeDbState):
     app.dependency_overrides[get_db] = override_get_db
 
 
-def test_schema_sql_defines_four_core_tables() -> None:
+def test_schema_sql_defines_core_tables() -> None:
     statements = read_table_sql()
-    assert len(statements) == 4
+    assert len(statements) == 5
     joined = "\n".join(statements)
-    for table in ("users", "rides", "ride_members", "positions"):
+    for table in ("users", "rides", "ride_members", "positions", "ride_alerts"):
         assert f"CREATE TABLE IF NOT EXISTS {table}" in joined
 
 
@@ -229,19 +273,32 @@ def test_ride_lifecycle_and_position_upsert() -> None:
                 "latitude": 33.7250,
                 "longitude": 73.0450,
                 "speed_kmh": 42,
+                "heading_degrees": 135,
                 "battery_percent": 80,
             },
         )
 
+        alert_resp = client.post(
+            f"/rides/{code}/alert",
+            json={"user_id": rider_id, "alert_type": "wait"},
+        )
+        assert alert_resp.status_code == 201
+        assert alert_resp.json()["sender_name"] == "Bilal"
+        assert alert_resp.json()["alert_type"] == "wait"
+
         positions = client.get(f"/rides/{code}/positions")
         assert positions.status_code == 200
-        riders = positions.json()["riders"]
+        payload = positions.json()
+        assert payload["latest_alert"]["alert_type"] == "wait"
+        assert payload["latest_alert"]["sender_name"] == "Bilal"
+        riders = payload["riders"]
         assert len(riders) == 2
         by_id = {item["rider"]["id"]: item for item in riders}
         assert by_id[host_id]["age_seconds"] == 75
         assert by_id[host_id]["is_stale"] is True
         assert by_id[rider_id]["age_seconds"] == 0
         assert by_id[rider_id]["is_stale"] is False
+        assert by_id[rider_id]["heading_degrees"] == 135
 
         assert client.post(f"/rides/{code}/end", json={"host_id": rider_id}).status_code == 403
         assert client.post(f"/rides/{code}/end", json={"host_id": host_id}).status_code == 200

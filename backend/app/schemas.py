@@ -51,6 +51,7 @@ class UpdatePositionRequest(_TrimmedModel):
     latitude: float = Field(ge=-90.0, le=90.0)
     longitude: float = Field(ge=-180.0, le=180.0)
     speed_kmh: float = Field(default=0.0, ge=0.0)
+    heading_degrees: float = Field(default=0.0, ge=0.0, le=360.0)
     battery_percent: int | None = Field(default=None, ge=0, le=100)
 
 
@@ -70,10 +71,27 @@ class RiderPositionOut(_TrimmedModel):
     latitude: float
     longitude: float
     speed_kmh: float
+    heading_degrees: float = 0.0
     battery_percent: int | None
     age_seconds: int
     is_stale: bool
     updated_at: datetime
+
+
+class SendAlertRequest(_TrimmedModel):
+    user_id: int = Field(gt=0)
+    alert_type: str = Field(pattern="^(fuel|wait|help)$")
+    message: str = Field(default="", max_length=120)
+
+
+class RideAlertOut(_TrimmedModel):
+    id: int
+    user_id: int
+    sender_name: str
+    alert_type: str
+    message: str
+    age_seconds: int
+    created_at: datetime
 
 
 class RidePositionsResponse(_TrimmedModel):
@@ -84,6 +102,7 @@ class RidePositionsResponse(_TrimmedModel):
     is_ended: bool
     ended_at: datetime | None
     riders: list[RiderPositionOut]
+    latest_alert: RideAlertOut | None = None
 
 
 class EndRideRequest(_TrimmedModel):
