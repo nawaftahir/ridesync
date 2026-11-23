@@ -8,7 +8,7 @@ Roadmap of upcoming features, polish, and release prep after core live map, plac
 - [x] **Interactive Convoy Screen (`lib/screens/convoy_screen.dart`):** tap any rider to focus/pan the map onto them, show distance from you (e.g., `450 m away`), and highlight signal-lost / fell-behind riders clearly.
 - [x] **One-tap Copy / Share join code:** copy or share the 6-character ride code + direct clickable HTTPS App Link directly from `HostRideScreen` and the active map top bar.
 - [x] **Real phone battery %:** send live device battery level in `POST /rides/{code}/position` (the `positions.battery` column in MariaDB is already ready).
-- [ ] **Group tab (`lib/screens/group_screen.dart`):** replace the WIP card with saved riding crews / invites or a dedicated live Convoy dashboard.
+- [x] **Group tab (`lib/screens/group_screen.dart`):** replaced the WIP card with a live Convoy & Saved Riding Crews hub (copy/share active ride invite, open convoy list, create/edit/delete saved crews, and start a ride with a crew).
 
 ---
 

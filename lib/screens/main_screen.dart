@@ -310,7 +310,12 @@ class _MainScreenState extends State<MainScreen> {
               JoinRideScreen(apiService: _apiService, riderName: _riderName),
             ),
           ),
-          GroupScreen(activeRide: _activeRide, riders: _liveRiders),
+          GroupScreen(
+            activeRide: _activeRide,
+            riders: _liveRiders,
+            serverBaseUrl: _apiService.cleanBaseUrl,
+            onHostRide: () => _openHostRide(),
+          ),
           ProfileScreen(
             themeMode: widget.themeMode,
             onThemeModeChanged: widget.onThemeModeChanged,

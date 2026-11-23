@@ -41,15 +41,15 @@ void main() {
     expect(find.text('Past rides'), findsOneWidget);
     expect(find.text('No past rides yet'), findsOneWidget);
 
-    // Switch to Group tab and check work-in-progress card.
+    // Switch to Group tab and check empty riding crews state.
     await tester.tap(find.text('Group'));
-    await tester.pump();
-    expect(find.text('Work in progress'), findsOneWidget);
+    await tester.pumpAndSettle();
+    expect(find.text('No riding crews yet'), findsOneWidget);
 
     // Switch to Profile tab and check profile, server setting, & login link.
     await tester.tap(find.text('Profile'));
     await tester.pump();
-    expect(find.text('Nawaf'), findsOneWidget);
+    expect(find.text('Rider'), findsOneWidget);
     expect(find.text('Sign up or log in'), findsOneWidget);
     await tester.drag(find.byType(ListView), const Offset(0, -300));
     await tester.pumpAndSettle();
