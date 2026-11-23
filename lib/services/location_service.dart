@@ -18,17 +18,26 @@ enum LocationStatus {
 
 // A single GPS reading from the device, converted into map-friendly values.
 class GpsFix {
-  const GpsFix({required this.point, required this.speedKmh});
+  const GpsFix({
+    required this.point,
+    required this.speedKmh,
+    this.headingDegrees = 0,
+  });
 
   final LatLng point;
   final double speedKmh;
+  final double headingDegrees;
 
   factory GpsFix.fromPosition(Position position) {
-    // Geolocator reports speed in m/s (or negative when unavailable).
+    // Geolocator reports speed in m/s and heading in degrees (negative when unknown).
     final speedMetersPerSec = position.speed < 0 ? 0.0 : position.speed;
+    final heading = position.heading < 0 || position.heading > 360
+        ? 0.0
+        : position.heading;
     return GpsFix(
       point: LatLng(position.latitude, position.longitude),
       speedKmh: speedMetersPerSec * 3.6,
+      headingDegrees: heading,
     );
   }
 }

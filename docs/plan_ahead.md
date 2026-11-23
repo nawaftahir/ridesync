@@ -15,9 +15,9 @@ Roadmap of upcoming features, polish, and release prep after core live map, plac
 ## 2. Riding & Map UX Polish
 - [x] **Recover active ride on restart:** save the active ride code and user ID locally so accidentally closing the app mid-ride restores your convoy session.
 - [x] **"Fit all riders" map button:** one tap frames every active rider and the destination pin on screen.
-- [ ] **Keep screen awake & background GPS:** prevent screen sleep while mounted on handlebars, and optionally keep sharing GPS while the screen is locked.
-- [ ] **Rider heading / direction arrow:** show travel direction on map pins using GPS heading.
-- [ ] **Quick convoy alerts:** one-tap motorcycle status pings (*Fuel stop*, *Wait up*, *Need help*).
+- [x] **Keep screen awake during active rides:** prevents screen sleep while mounted on handlebars and pauses automatically when backgrounded or idle.
+- [x] **Rider heading / direction arrow:** show travel direction on map pins using GPS heading.
+- [x] **Quick convoy alerts & notifications:** one-tap motorcycle status pings (*Fuel stop*, *Wait up*, *Need help*) with live banners and local Android/iOS notifications.
 
 ---
 

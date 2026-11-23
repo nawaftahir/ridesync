@@ -11,7 +11,9 @@ import 'package:ridesync/screens/main_screen.dart';
 import 'package:ridesync/services/app_preferences.dart';
 import 'package:ridesync/services/battery_service.dart';
 import 'package:ridesync/services/location_service.dart';
+import 'package:ridesync/services/notification_service.dart';
 import 'package:ridesync/services/ride_api_service.dart';
+import 'package:ridesync/services/wakelock_service.dart';
 import 'package:ridesync/theme/app_theme.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -310,6 +312,162 @@ void main() {
       expect(pollCount, greaterThan(pollsWhenPaused));
     },
   );
+
+  testWidgets(
+    'Quick convoy alerts, local notifications, wakelock, and heading arrow work end-to-end',
+    (tester) async {
+      final notifications = _FakeNotificationService();
+      final wakelock = _FakeWakelockService();
+      double? sentHeading;
+
+      final client = MockClient((request) async {
+        if (request.method == 'POST' &&
+            request.url.path == '/rides/UX1234/position') {
+          final body = jsonDecode(request.body) as Map<String, dynamic>;
+          sentHeading = (body['heading_degrees'] as num?)?.toDouble();
+          return http.Response(
+            jsonEncode({
+              'code': 'UX1234',
+              'user_id': 1,
+              'updated_at': '2026-11-23T00:00:00Z',
+            }),
+            200,
+          );
+        }
+        if (request.method == 'POST' &&
+            request.url.path == '/rides/UX1234/alert') {
+          final body = jsonDecode(request.body) as Map<String, dynamic>;
+          return http.Response(
+            jsonEncode({
+              'id': 55,
+              'user_id': 1,
+              'sender_name': 'Nawaf',
+              'alert_type': body['alert_type'],
+              'message': 'Needs a fuel stop',
+              'age_seconds': 0,
+              'created_at': '2026-11-23T00:00:00Z',
+            }),
+            201,
+          );
+        }
+        if (request.method == 'GET' &&
+            request.url.path == '/rides/UX1234/positions') {
+          return http.Response(
+            jsonEncode({
+              'code': 'UX1234',
+              'destination': 'Daman-e-Koh',
+              'is_ended': false,
+              'ended_at': null,
+              'riders': [
+                {
+                  'rider': {'id': 2, 'name': 'Bilal'},
+                  'latitude': 33.7220,
+                  'longitude': 73.0440,
+                  'speed_kmh': 0,
+                  'heading_degrees': 90,
+                  'battery_percent': 70,
+                  'age_seconds': 95,
+                  'is_stale': true,
+                },
+              ],
+              'latest_alert': {
+                'id': 44,
+                'user_id': 2,
+                'sender_name': 'Bilal',
+                'alert_type': 'help',
+                'message': 'Needs help!',
+                'age_seconds': 3,
+                'created_at': '2026-11-23T00:00:00Z',
+              },
+            }),
+            200,
+          );
+        }
+        return http.Response('Not found', 404);
+      });
+
+      final api = RideApiService(
+        baseUrl: 'https://api.example.com',
+        client: client,
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.light,
+          home: MainScreen(
+            apiService: api,
+            locationService: const _FixedLocationService(
+              GpsFix(
+                point: LatLng(33.7215, 73.0433),
+                speedKmh: 45,
+                headingDegrees: 180,
+              ),
+            ),
+            batteryService: const _FixedBatteryService(85),
+            notificationService: notifications,
+            wakelockService: wakelock,
+            initialActiveRide: const ActiveRide(
+              joinCode: 'UX1234',
+              destination: 'Daman-e-Koh',
+              isHost: true,
+              currentUserId: 1,
+              currentUserName: 'Nawaf',
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Wakelock enabled, heading uploaded, incoming alert + stale notifications fired.
+      expect(wakelock.lastEnabled, isTrue);
+      expect(sentHeading, 180);
+      expect(find.text('Bilal: Needs help!'), findsOneWidget);
+      expect(
+        notifications.shownTitles,
+        containsAll(['Bilal: Need help', 'Bilal signal lost']),
+      );
+
+      // Send a Fuel stop alert via the quick alert sheet.
+      await tester.tap(find.byTooltip('Send convoy alert'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Fuel stop'));
+      await tester.pumpAndSettle();
+      expect(find.text('Nawaf: Needs a fuel stop'), findsOneWidget);
+
+      // Ending the ride disables wakelock (dismiss snackbar covering End Ride).
+      await tester.pump(const Duration(seconds: 5));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('End Ride'));
+      await tester.pumpAndSettle();
+      expect(wakelock.lastEnabled, isFalse);
+    },
+  );
+}
+
+class _FakeNotificationService extends NotificationService {
+  final List<String> shownTitles = [];
+
+  @override
+  Future<void> initializeAndRequestPermission() async {}
+
+  @override
+  Future<void> showConvoyNotification({
+    required int id,
+    required String title,
+    required String body,
+    bool urgent = false,
+  }) async {
+    shownTitles.add(title);
+  }
+}
+
+class _FakeWakelockService extends WakelockService {
+  bool? lastEnabled;
+
+  @override
+  Future<void> setEnabled(bool enabled) async {
+    lastEnabled = enabled;
+  }
 }
 
 class _StreamLocationService extends LocationService {

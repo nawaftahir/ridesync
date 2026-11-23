@@ -26,6 +26,31 @@ class BackendHealth {
   bool get isDatabaseConnected => database == 'connected';
 }
 
+class RideAlert {
+  const RideAlert({
+    required this.id,
+    required this.userId,
+    required this.senderName,
+    required this.alertType,
+    required this.message,
+    required this.ageSeconds,
+  });
+
+  final int id;
+  final int userId;
+  final String senderName;
+  final String alertType;
+  final String message;
+  final int ageSeconds;
+
+  String get title => switch (alertType) {
+    'fuel' => 'Fuel stop',
+    'wait' => 'Wait up',
+    'help' => 'Need help',
+    _ => 'Convoy alert',
+  };
+}
+
 class RidePositionsSnapshot {
   const RidePositionsSnapshot({
     required this.code,
@@ -34,6 +59,7 @@ class RidePositionsSnapshot {
     this.destLng,
     required this.isEnded,
     required this.riders,
+    this.latestAlert,
   });
 
   final String code;
@@ -42,6 +68,7 @@ class RidePositionsSnapshot {
   final double? destLng;
   final bool isEnded;
   final List<RiderPosition> riders;
+  final RideAlert? latestAlert;
 }
 
 // Talks to the RideSync FastAPI backend over HTTP.
@@ -228,15 +255,20 @@ class RideApiService {
     required double latitude,
     required double longitude,
     double speedKmh = 0,
+    double headingDegrees = 0,
     int? batteryPercent,
   }) async {
     final cleanCode = code.trim().toUpperCase();
     final safeSpeed = speedKmh < 0 ? 0.0 : speedKmh;
+    final safeHeading = headingDegrees < 0 || headingDegrees > 360
+        ? 0.0
+        : headingDegrees;
     final body = <String, dynamic>{
       'user_id': userId,
       'latitude': latitude,
       'longitude': longitude,
       'speed_kmh': safeSpeed,
+      'heading_degrees': safeHeading,
       'battery_percent': ?batteryPercent,
     };
     final response = await _send(
@@ -249,6 +281,41 @@ class RideApiService {
     if (response.statusCode != 200) {
       throw _errorFromResponse(response);
     }
+  }
+
+  Future<RideAlert> sendAlert({
+    required String code,
+    required int userId,
+    required String alertType,
+    String message = '',
+  }) async {
+    final cleanCode = code.trim().toUpperCase();
+    final response = await _send(
+      () => _client.post(
+        _uri('/rides/$cleanCode/alert'),
+        headers: const {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'user_id': userId,
+          'alert_type': alertType,
+          'message': message.trim(),
+        }),
+      ),
+    );
+    if (response.statusCode != 201) {
+      throw _errorFromResponse(response);
+    }
+    return _parseAlert(_decodeJsonObject(response));
+  }
+
+  RideAlert _parseAlert(Map<String, dynamic> json) {
+    return RideAlert(
+      id: (json['id'] as num).toInt(),
+      userId: (json['user_id'] as num).toInt(),
+      senderName: (json['sender_name'] as String?) ?? 'Rider',
+      alertType: (json['alert_type'] as String?) ?? 'wait',
+      message: (json['message'] as String?) ?? '',
+      ageSeconds: ((json['age_seconds'] as num?) ?? 0).toInt(),
+    );
   }
 
   Future<RidePositionsSnapshot> fetchPositions(String code) async {
@@ -274,12 +341,16 @@ class RideApiService {
           latitude: (item['latitude'] as num).toDouble(),
           longitude: (item['longitude'] as num).toDouble(),
           speedKmh: ((item['speed_kmh'] as num?) ?? 0).toDouble(),
-          headingDegrees: 0,
+          headingDegrees: ((item['heading_degrees'] as num?) ?? 0).toDouble(),
           batteryPercent: (item['battery_percent'] as num?)?.toInt(),
           ageSeconds: ((item['age_seconds'] as num?) ?? 0).toInt(),
         ),
       );
     }
+    final rawAlert = data['latest_alert'];
+    final latestAlert = rawAlert is Map<String, dynamic>
+        ? _parseAlert(rawAlert)
+        : null;
     return RidePositionsSnapshot(
       code: (data['code'] as String?) ?? cleanCode,
       destination: (data['destination'] as String?) ?? '',
@@ -287,6 +358,7 @@ class RideApiService {
       destLng: (data['dest_lng'] as num?)?.toDouble(),
       isEnded: (data['is_ended'] as bool?) ?? false,
       riders: riders,
+      latestAlert: latestAlert,
     );
   }
 

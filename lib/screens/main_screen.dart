@@ -16,7 +16,9 @@ import 'package:ridesync/services/battery_service.dart';
 import 'package:ridesync/services/deep_link_service.dart';
 import 'package:ridesync/services/location_service.dart';
 import 'package:ridesync/services/map_search_service.dart';
+import 'package:ridesync/services/notification_service.dart';
 import 'package:ridesync/services/ride_api_service.dart';
+import 'package:ridesync/services/wakelock_service.dart';
 import 'package:ridesync/utils/ride_share.dart';
 
 // Main app shell holding the 4-tab bottom bar and the active ride state.
@@ -25,6 +27,8 @@ class MainScreen extends StatefulWidget {
     super.key,
     this.locationService = const LocationService(),
     this.batteryService = const BatteryService(),
+    this.notificationService = const NotificationService(),
+    this.wakelockService = const WakelockService(),
     this.deepLinkService = const DeepLinkService(),
     this.apiService,
     this.mapSearchService,
@@ -36,6 +40,8 @@ class MainScreen extends StatefulWidget {
 
   final LocationService locationService;
   final BatteryService batteryService;
+  final NotificationService notificationService;
+  final WakelockService wakelockService;
   final DeepLinkService deepLinkService;
   final RideApiService? apiService;
   final MapSearchService? mapSearchService;
@@ -285,6 +291,8 @@ class _MainScreenState extends State<MainScreen> {
             ),
             locationService: widget.locationService,
             batteryService: widget.batteryService,
+            notificationService: widget.notificationService,
+            wakelockService: widget.wakelockService,
             apiService: _apiService,
             searchService: _searchService,
             onRidersUpdated: (riders) {

@@ -11,7 +11,9 @@ import 'package:ridesync/screens/convoy_screen.dart';
 import 'package:ridesync/services/battery_service.dart';
 import 'package:ridesync/services/location_service.dart';
 import 'package:ridesync/services/map_search_service.dart';
+import 'package:ridesync/services/notification_service.dart';
 import 'package:ridesync/services/ride_api_service.dart';
+import 'package:ridesync/services/wakelock_service.dart';
 import 'package:ridesync/utils/map_styles.dart';
 import 'package:ridesync/utils/ride_share.dart';
 import 'package:ridesync/widgets/place_search_sheet.dart';
@@ -40,6 +42,8 @@ class RideMapScreen extends StatefulWidget {
     this.onHostRideWithPlace,
     this.locationService = const LocationService(),
     this.batteryService = const BatteryService(),
+    this.notificationService = const NotificationService(),
+    this.wakelockService = const WakelockService(),
     this.apiService,
     this.searchService,
     this.onRidersUpdated,
@@ -54,6 +58,8 @@ class RideMapScreen extends StatefulWidget {
   onHostRideWithPlace;
   final LocationService locationService;
   final BatteryService batteryService;
+  final NotificationService notificationService;
+  final WakelockService wakelockService;
   final RideApiService? apiService;
   final MapSearchService? searchService;
   final ValueChanged<List<RiderPosition>>? onRidersUpdated;
@@ -84,6 +90,12 @@ class _RideMapScreenState extends State<RideMapScreen>
   bool _hasInitialGpsCenter = false;
   bool _isSheetCollapsed = false;
   bool _bannerDismissed = false;
+
+  // Convoy quick alert & notification state.
+  RideAlert? _activeAlert;
+  int? _dismissedAlertId;
+  int? _lastNotifiedAlertId;
+  final Set<int> _notifiedStaleRiderIds = {};
 
   // Map navigation state (bearing for compass needle, pitch for 2D/3D toggle).
   double _cameraBearing = 0;
@@ -121,7 +133,9 @@ class _RideMapScreenState extends State<RideMapScreen>
     WidgetsBinding.instance.addObserver(this);
     _listenServiceStatus();
     _startLocationTracking();
+    unawaited(widget.wakelockService.setEnabled(widget.activeRide != null));
     if (_isLiveBackendRide) {
+      unawaited(widget.notificationService.initializeAndRequestPermission());
       unawaited(_refreshBatteryPercent());
       _startBackendSync();
     }
@@ -147,12 +161,19 @@ class _RideMapScreenState extends State<RideMapScreen>
     _remoteDestPoint = null;
     _activeRoute = null;
     _lastRoutedOrigin = null;
+    _activeAlert = null;
+    _dismissedAlertId = null;
+    _lastNotifiedAlertId = null;
+    _notifiedStaleRiderIds.clear();
+    unawaited(widget.wakelockService.setEnabled(widget.activeRide != null));
     if (widget.activeRide != null) {
       _previewPlace = null;
       _previewRoute = null;
       _isPickingOnMap = false;
     }
     if (_isLiveBackendRide) {
+      unawaited(widget.notificationService.initializeAndRequestPermission());
+      unawaited(_refreshBatteryPercent());
       _startBackendSync();
     }
     if (widget.activeRide != null) {
@@ -163,6 +184,7 @@ class _RideMapScreenState extends State<RideMapScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    unawaited(widget.wakelockService.setEnabled(false));
     _positionSub?.cancel();
     _serviceStatusSub?.cancel();
     _stopBackendSync();
@@ -246,6 +268,7 @@ class _RideMapScreenState extends State<RideMapScreen>
         latitude: fix.point.latitude,
         longitude: fix.point.longitude,
         speedKmh: fix.speedKmh,
+        headingDegrees: fix.headingDegrees,
         batteryPercent: _myBatteryPercent,
       );
     } on RideApiException {
@@ -276,15 +299,53 @@ class _RideMapScreenState extends State<RideMapScreen>
         _stopBackendSync();
         setState(() {
           _liveRiders = const [];
+          _activeAlert = null;
         });
         widget.onRidersUpdated?.call(const []);
         if (!ride.isHost) {
+          unawaited(
+            widget.notificationService.showConvoyNotification(
+              id: 9001,
+              title: 'Convoy ended',
+              body: 'Ride $code was ended by the host.',
+            ),
+          );
           ScaffoldMessenger.maybeOf(context)?.showSnackBar(
             SnackBar(content: Text('Ride $code was ended by the host.')),
           );
           widget.onEndRide();
         }
         return;
+      }
+
+      final incomingAlert = snapshot.latestAlert;
+      if (incomingAlert != null &&
+          incomingAlert.id != _lastNotifiedAlertId &&
+          incomingAlert.userId != ride.currentUserId) {
+        _lastNotifiedAlertId = incomingAlert.id;
+        unawaited(
+          widget.notificationService.showConvoyNotification(
+            id: 1000 + (incomingAlert.id % 1000),
+            title: '${incomingAlert.senderName}: ${incomingAlert.title}',
+            body: incomingAlert.message,
+            urgent: incomingAlert.alertType == 'help',
+          ),
+        );
+      }
+
+      for (final pos in snapshot.riders) {
+        if (pos.rider.id == ride.currentUserId) continue;
+        if (pos.isStale && _notifiedStaleRiderIds.add(pos.rider.id)) {
+          unawaited(
+            widget.notificationService.showConvoyNotification(
+              id: 2000 + (pos.rider.id % 1000),
+              title: '${pos.rider.name} signal lost',
+              body: 'No GPS update for over 60 seconds.',
+            ),
+          );
+        } else if (!pos.isStale) {
+          _notifiedStaleRiderIds.remove(pos.rider.id);
+        }
       }
 
       final hadDest = _activeDestPoint != null;
@@ -295,6 +356,7 @@ class _RideMapScreenState extends State<RideMapScreen>
 
       setState(() {
         _liveRiders = snapshot.riders;
+        _activeAlert = incomingAlert;
         if (incomingDest != null) {
           _remoteDestPoint = incomingDest;
         }
@@ -332,6 +394,7 @@ class _RideMapScreenState extends State<RideMapScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.hidden) {
+      unawaited(widget.wakelockService.setEnabled(false));
       // Pause periodic network polling when backgrounded to save radio battery.
       _stopBackendSync();
       // Pause GPS when idle in the background so it doesn't drain battery.
@@ -344,6 +407,7 @@ class _RideMapScreenState extends State<RideMapScreen>
     }
     if (state != AppLifecycleState.resumed) return;
 
+    unawaited(widget.wakelockService.setEnabled(widget.activeRide != null));
     if (_isLiveBackendRide) {
       _startBackendSync();
     }
@@ -752,7 +816,7 @@ class _RideMapScreenState extends State<RideMapScreen>
             latitude: fix.point.latitude,
             longitude: fix.point.longitude,
             speedKmh: fix.speedKmh,
-            headingDegrees: pos.headingDegrees,
+            headingDegrees: fix.headingDegrees,
             batteryPercent: _myBatteryPercent ?? pos.batteryPercent,
             ageSeconds: 0,
           ),
@@ -770,13 +834,83 @@ class _RideMapScreenState extends State<RideMapScreen>
           latitude: fix.point.latitude,
           longitude: fix.point.longitude,
           speedKmh: fix.speedKmh,
-          headingDegrees: 0,
+          headingDegrees: fix.headingDegrees,
           batteryPercent: _myBatteryPercent,
           ageSeconds: 0,
         ),
       );
     }
     return merged;
+  }
+
+  Future<void> _openQuickAlertSheet() async {
+    final api = widget.apiService;
+    final ride = widget.activeRide;
+    final userId = ride?.currentUserId;
+    if (api == null || !api.isEnabled || ride == null || userId == null) {
+      return;
+    }
+    final picked = await showModalBottomSheet<String>(
+      context: context,
+      useSafeArea: true,
+      builder: (sheetContext) => Padding(
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'Send Convoy Alert',
+              style: Theme.of(sheetContext).textTheme.titleMedium
+                  ?.copyWith(fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 12),
+            FilledButton.tonalIcon(
+              onPressed: () => Navigator.of(sheetContext).pop('fuel'),
+              icon: const Icon(Icons.local_gas_station_outlined),
+              label: const Text('Fuel stop'),
+            ),
+            const SizedBox(height: 8),
+            FilledButton.tonalIcon(
+              onPressed: () => Navigator.of(sheetContext).pop('wait'),
+              icon: const Icon(Icons.front_hand_outlined),
+              label: const Text('Wait up'),
+            ),
+            const SizedBox(height: 8),
+            FilledButton.icon(
+              style: FilledButton.styleFrom(
+                backgroundColor: Theme.of(sheetContext).colorScheme.error,
+                foregroundColor: Theme.of(sheetContext).colorScheme.onError,
+              ),
+              onPressed: () => Navigator.of(sheetContext).pop('help'),
+              icon: const Icon(Icons.warning_amber_rounded),
+              label: const Text('Need help'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (!mounted || picked == null) return;
+    try {
+      final sent = await api.sendAlert(
+        code: ride.joinCode,
+        userId: userId,
+        alertType: picked,
+      );
+      if (!mounted) return;
+      setState(() {
+        _activeAlert = sent;
+        _dismissedAlertId = null;
+        _lastNotifiedAlertId = sent.id;
+      });
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        SnackBar(content: Text('Sent "${sent.title}" to convoy')),
+      );
+    } on RideApiException catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.maybeOf(context)
+          ?.showSnackBar(SnackBar(content: Text(error.message)));
+    }
   }
 
   void _fitAllRiders() {
@@ -831,11 +965,13 @@ class _RideMapScreenState extends State<RideMapScreen>
     required Color dotColor,
     required Color pillColor,
     required Color labelColor,
+    double headingDegrees = 0,
+    bool showHeading = false,
   }) {
     final colors = Theme.of(context).colorScheme;
     return Marker(
       point: _toGeographic(point),
-      size: const Size(108, 58),
+      size: const Size(108, 62),
       alignment: Alignment.bottomCenter,
       child: Tooltip(
         message: tooltip,
@@ -861,25 +997,45 @@ class _RideMapScreenState extends State<RideMapScreen>
               ),
             ),
             const SizedBox(height: 2),
-            Container(
-              width: 24,
-              height: 24,
-              decoration: BoxDecoration(
-                color: dotColor.withValues(alpha: 0.25),
-                shape: BoxShape.circle,
-              ),
-              alignment: Alignment.center,
-              child: Container(
-                width: 14,
-                height: 14,
-                decoration: BoxDecoration(
-                  color: dotColor,
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                    color: colors.surfaceContainerLow,
-                    width: 2.5,
+            SizedBox(
+              width: 28,
+              height: 28,
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  Container(
+                    width: 24,
+                    height: 24,
+                    decoration: BoxDecoration(
+                      color: dotColor.withValues(alpha: 0.25),
+                      shape: BoxShape.circle,
+                    ),
                   ),
-                ),
+                  if (showHeading)
+                    Transform.rotate(
+                      angle: (headingDegrees - _cameraBearing) * math.pi / 180,
+                      child: Transform.translate(
+                        offset: const Offset(0, -11),
+                        child: Icon(
+                          Icons.navigation_rounded,
+                          size: 12,
+                          color: dotColor,
+                        ),
+                      ),
+                    ),
+                  Container(
+                    width: 14,
+                    height: 14,
+                    decoration: BoxDecoration(
+                      color: dotColor,
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                        color: colors.surfaceContainerLow,
+                        width: 2.5,
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
           ],
@@ -987,6 +1143,10 @@ class _RideMapScreenState extends State<RideMapScreen>
             dotColor: dotColor,
             pillColor: colors.surfaceContainerLow,
             labelColor: position.isStale ? colors.tertiary : colors.onSurface,
+            headingDegrees: position.headingDegrees,
+            showHeading:
+                !position.isStale &&
+                (position.headingDegrees > 0 || position.speedKmh >= 3),
           ),
         );
       }
@@ -1003,6 +1163,8 @@ class _RideMapScreenState extends State<RideMapScreen>
           dotColor: colors.primary,
           pillColor: colors.primary,
           labelColor: colors.onPrimary,
+          headingDegrees: fix.headingDegrees,
+          showHeading: fix.headingDegrees > 0 || fix.speedKmh >= 3,
         ),
       );
     }
@@ -1148,6 +1310,19 @@ class _RideMapScreenState extends State<RideMapScreen>
                     const SizedBox(height: 8),
                     _MapOfflineBanner(onRetry: _retryMapStyle),
                   ],
+                  if (ride != null &&
+                      _activeAlert != null &&
+                      _activeAlert!.id != _dismissedAlertId) ...[
+                    const SizedBox(height: 8),
+                    _ConvoyAlertBanner(
+                      alert: _activeAlert!,
+                      onDismiss: () {
+                        setState(() {
+                          _dismissedAlertId = _activeAlert!.id;
+                        });
+                      },
+                    ),
+                  ],
                   if (showPermissionBanner) ...[
                     const SizedBox(height: 8),
                     _LocationBanner(
@@ -1165,34 +1340,38 @@ class _RideMapScreenState extends State<RideMapScreen>
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Column(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          _SpeedPill(speedKmh: _myFix?.speedKmh),
-                          if (ride != null) ...[
-                            const SizedBox(height: 8),
-                            Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
+                      Flexible(
+                        child: Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: [
+                            _SpeedPill(speedKmh: _myFix?.speedKmh),
+                            if (ride != null) ...[
+                              _MapActionButton(
+                                icon: Icons.fit_screen_outlined,
+                                iconColor: colors.onSurface,
+                                tooltip: 'Fit all riders',
+                                onPressed: _fitAllRiders,
+                              ),
+                              _MapActionButton(
+                                icon: Icons.people_outline,
+                                iconColor: colors.primary,
+                                tooltip: 'Convoy riders',
+                                onPressed: _openConvoy,
+                              ),
+                              if (_isLiveBackendRide)
                                 _MapActionButton(
-                                  icon: Icons.fit_screen_outlined,
-                                  iconColor: colors.onSurface,
-                                  tooltip: 'Fit all riders',
-                                  onPressed: _fitAllRiders,
+                                  icon: Icons.campaign_outlined,
+                                  iconColor: colors.tertiary,
+                                  tooltip: 'Send convoy alert',
+                                  onPressed: _openQuickAlertSheet,
                                 ),
-                                const SizedBox(width: 8),
-                                _MapActionButton(
-                                  icon: Icons.people_outline,
-                                  iconColor: colors.primary,
-                                  tooltip: 'Convoy riders',
-                                  onPressed: _openConvoy,
-                                ),
-                              ],
-                            ),
+                            ],
                           ],
-                        ],
+                        ),
                       ),
+                      const SizedBox(width: 8),
                       Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
@@ -1299,6 +1478,61 @@ class _RideMapScreenState extends State<RideMapScreen>
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+// Banner shown when any rider in the convoy sends a quick status alert.
+class _ConvoyAlertBanner extends StatelessWidget {
+  const _ConvoyAlertBanner({required this.alert, required this.onDismiss});
+
+  final RideAlert alert;
+  final VoidCallback onDismiss;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final isUrgent = alert.alertType == 'help';
+    final bg = isUrgent ? colors.errorContainer : colors.tertiaryContainer;
+    final fg = isUrgent ? colors.onErrorContainer : colors.onTertiaryContainer;
+    final icon = switch (alert.alertType) {
+      'fuel' => Icons.local_gas_station_outlined,
+      'wait' => Icons.front_hand_outlined,
+      'help' => Icons.warning_amber_rounded,
+      _ => Icons.campaign_outlined,
+    };
+
+    return Material(
+      color: bg,
+      elevation: 3,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 6, 4, 6),
+        child: Row(
+          children: [
+            Icon(icon, size: 18, color: fg),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                '${alert.senderName}: ${alert.message}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w800,
+                  color: fg,
+                ),
+              ),
+            ),
+            IconButton(
+              onPressed: onDismiss,
+              icon: Icon(Icons.close, size: 18, color: fg),
+              visualDensity: VisualDensity.compact,
+              tooltip: 'Dismiss alert',
+            ),
+          ],
+        ),
       ),
     );
   }
