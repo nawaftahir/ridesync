@@ -5,7 +5,7 @@ class JoinRideScreen extends StatefulWidget {
   const JoinRideScreen({
     super.key,
     this.apiService,
-    this.riderName = 'Nawaf',
+    this.riderName = 'Rider',
     this.initialCode,
     this.autoJoin = false,
   });
@@ -20,11 +20,19 @@ class JoinRideScreen extends StatefulWidget {
 }
 
 class _JoinRideScreenState extends State<JoinRideScreen> {
+  late final TextEditingController _nameController = TextEditingController(
+    text: widget.riderName == 'Rider' ? '' : widget.riderName,
+  );
   late final TextEditingController _codeController = TextEditingController(
     text: (widget.initialCode ?? '').trim().toUpperCase(),
   );
   String? _errorMessage;
   bool _isLoading = false;
+
+  String get _effectiveRiderName {
+    final typed = _nameController.text.trim();
+    return typed.isEmpty ? 'Rider' : typed;
+  }
 
   @override
   void initState() {
@@ -63,7 +71,7 @@ class _JoinRideScreenState extends State<JoinRideScreen> {
     try {
       final joined = await api.joinRide(
         code: code,
-        riderName: widget.riderName,
+        riderName: _effectiveRiderName,
       );
       if (!mounted) return;
       setState(() {
@@ -81,6 +89,7 @@ class _JoinRideScreenState extends State<JoinRideScreen> {
 
   @override
   void dispose() {
+    _nameController.dispose();
     _codeController.dispose();
     super.dispose();
   }
@@ -97,7 +106,21 @@ class _JoinRideScreenState extends State<JoinRideScreen> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Text('Enter Code from a host to join.', style: text.bodyLarge),
-            const SizedBox(height: 24),
+            const SizedBox(height: 16),
+
+            TextField(
+              controller: _nameController,
+              textCapitalization: TextCapitalization.words,
+              maxLength: 30,
+              decoration: const InputDecoration(
+                labelText: 'Your name (optional)',
+                hintText: 'Defaults to Rider',
+                prefixIcon: Icon(Icons.person_outline),
+                counterText: '',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 16),
 
             TextField(
               controller: _codeController,

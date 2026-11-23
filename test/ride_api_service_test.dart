@@ -279,7 +279,7 @@ void main() {
         home: HostRideScreen(apiService: api, hostName: 'Nawaf'),
       ),
     );
-    await tester.enterText(find.byType(TextField), 'Nathia Gali');
+    await tester.enterText(find.byType(TextField).last, 'Nathia Gali');
     await tester.tap(find.text('Generate Join Code'));
     await tester.pumpAndSettle();
 
@@ -297,7 +297,7 @@ void main() {
       findsOneWidget,
     );
 
-    await tester.enterText(find.byType(TextField), 'NOPE99');
+    await tester.enterText(find.byType(TextField).last, 'NOPE99');
     await tester.tap(find.text('Join Ride'));
     await tester.pumpAndSettle();
     expect(find.text('Not found'), findsOneWidget);
@@ -389,9 +389,10 @@ void main() {
     await tester.tap(find.text('Host a ride'));
     await tester.pumpAndSettle();
 
-    await tester.enterText(find.byType(TextField), 'Khanpur Dam');
+    await tester.enterText(find.byType(TextField).last, 'Khanpur Dam');
     await tester.tap(find.text('Generate Join Code'));
     await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('Start Ride'));
     await tester.tap(find.text('Start Ride'));
     await tester.pumpAndSettle();
 
@@ -461,7 +462,7 @@ void main() {
     await tester.tap(find.text('Join code'));
     await tester.pumpAndSettle();
 
-    await tester.enterText(find.byType(TextField), 'JOIN99');
+    await tester.enterText(find.byType(TextField).last, 'JOIN99');
     await tester.tap(find.text('Join Ride'));
     await tester.pumpAndSettle();
 
@@ -495,7 +496,7 @@ void main() {
     await tester.pumpAndSettle();
 
     // Edit display name so multiple riders can distinguish each other.
-    await tester.tap(find.text('Nawaf'));
+    await tester.tap(find.text('Rider'));
     await tester.pumpAndSettle();
     expect(find.text('Rider Display Name'), findsOneWidget);
     await tester.enterText(find.byType(TextField), 'Bilal');
@@ -528,5 +529,70 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('http://10.0.2.2:8000'), findsOneWidget);
+  });
+
+  testWidgets('New user can set a temporary name when hosting or joining', (
+    tester,
+  ) async {
+    String? hostedAs;
+    String? joinedAs;
+
+    final api = RideApiService(
+      baseUrl: 'https://api.example.com',
+      client: MockClient((request) async {
+        final body = jsonDecode(request.body) as Map<String, dynamic>;
+        if (request.url.path == '/rides') {
+          hostedAs = body['host_name'] as String?;
+          return http.Response(
+            jsonEncode({
+              'code': 'TMP123',
+              'destination': 'Murree',
+              'host_id': 1,
+              'host_name': hostedAs,
+              'started_at': '2026-11-23T12:00:00Z',
+            }),
+            201,
+          );
+        }
+        if (request.url.path == '/rides/TMP123/join') {
+          joinedAs = body['name'] as String?;
+          return http.Response(
+            jsonEncode({
+              'code': 'TMP123',
+              'destination': 'Murree',
+              'user_id': 2,
+              'name': joinedAs,
+              'is_host': false,
+            }),
+            200,
+          );
+        }
+        return http.Response('Not found', 404);
+      }),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: HostRideScreen(apiService: api),
+      ),
+    );
+    await tester.enterText(find.byType(TextField).first, 'Zain');
+    await tester.enterText(find.byType(TextField).last, 'Murree');
+    await tester.tap(find.text('Generate Join Code'));
+    await tester.pumpAndSettle();
+    expect(hostedAs, 'Zain');
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: JoinRideScreen(apiService: api),
+      ),
+    );
+    await tester.enterText(find.byType(TextField).first, 'Ayesha');
+    await tester.enterText(find.byType(TextField).last, 'TMP123');
+    await tester.tap(find.text('Join Ride'));
+    await tester.pumpAndSettle();
+    expect(joinedAs, 'Ayesha');
   });
 }

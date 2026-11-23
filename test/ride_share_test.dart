@@ -155,7 +155,7 @@ void main() {
       ),
     );
 
-    await tester.enterText(find.byType(TextField), 'Daman-e-Koh');
+    await tester.enterText(find.byType(TextField).last, 'Daman-e-Koh');
     await tester.tap(find.text('Generate Join Code'));
     await tester.pumpAndSettle();
 

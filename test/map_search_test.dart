@@ -290,6 +290,7 @@ void main() {
       expect(createdPayload?['dest_lat'], closeTo(33.7394, 1e-4));
       expect(createdPayload?['dest_lng'], closeTo(73.0558, 1e-4));
 
+      await tester.ensureVisible(find.text('Start Ride'));
       await tester.tap(find.text('Start Ride'));
       await tester.pumpAndSettle();
       expect(find.text('REAL77'), findsOneWidget);

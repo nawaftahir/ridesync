@@ -13,7 +13,7 @@ class ActiveRide {
     this.distanceKm,
     this.durationMinutes,
     this.currentUserId,
-    this.currentUserName = 'Nawaf',
+    this.currentUserName = 'Rider',
   });
 
   final String joinCode;
@@ -65,7 +65,7 @@ class ActiveRide {
       distanceKm: (json['distanceKm'] as num?)?.toDouble(),
       durationMinutes: (json['durationMinutes'] as num?)?.toInt(),
       currentUserId: (json['currentUserId'] as num?)?.toInt(),
-      currentUserName: (json['currentUserName'] as String?) ?? 'Nawaf',
+      currentUserName: (json['currentUserName'] as String?) ?? 'Rider',
     );
   }
 }

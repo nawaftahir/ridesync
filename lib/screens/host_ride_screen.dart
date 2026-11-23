@@ -12,7 +12,7 @@ class HostRideScreen extends StatefulWidget {
     super.key,
     this.apiService,
     this.searchService,
-    this.hostName = 'Nawaf',
+    this.hostName = 'Rider',
     this.initialPlace,
     this.initialRoute,
     this.nearPoint,
@@ -32,8 +32,16 @@ class HostRideScreen extends StatefulWidget {
 }
 
 class _HostRideScreenState extends State<HostRideScreen> {
+  late final TextEditingController _nameController = TextEditingController(
+    text: widget.hostName == 'Rider' ? '' : widget.hostName,
+  );
   late final TextEditingController _destinationController =
       TextEditingController(text: widget.initialPlace?.displayName ?? '');
+
+  String get _effectiveHostName {
+    final typed = _nameController.text.trim();
+    return typed.isEmpty ? 'Rider' : typed;
+  }
 
   late PlaceResult? _selectedPlace = widget.initialPlace;
   Timer? _searchDebounce;
@@ -137,7 +145,7 @@ class _HostRideScreenState extends State<HostRideScreen> {
         destLng: point?.longitude,
         distanceKm: matchedInitialRoute?.distanceKm,
         durationMinutes: matchedInitialRoute?.durationMinutes,
-        hostName: widget.hostName,
+        hostName: _effectiveHostName,
       );
       if (!mounted) return;
       setState(() {
@@ -163,7 +171,7 @@ class _HostRideScreenState extends State<HostRideScreen> {
             destLat: _selectedPlace?.point.latitude,
             destLng: _selectedPlace?.point.longitude,
             isHost: true,
-            currentUserName: widget.hostName,
+            currentUserName: _effectiveHostName,
           ),
     );
   }
@@ -202,6 +210,7 @@ class _HostRideScreenState extends State<HostRideScreen> {
   void dispose() {
     _searchDebounce?.cancel();
     _copiedResetTimer?.cancel();
+    _nameController.dispose();
     _destinationController.dispose();
     super.dispose();
   }
@@ -218,6 +227,21 @@ class _HostRideScreenState extends State<HostRideScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            Text('Your name', style: text.titleMedium),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _nameController,
+              textCapitalization: TextCapitalization.words,
+              maxLength: 30,
+              decoration: const InputDecoration(
+                hintText: 'Enter a temp name (optional, defaults to Rider)',
+                prefixIcon: Icon(Icons.person_outline),
+                counterText: '',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 20),
+
             Text('Where are you going?', style: text.titleMedium),
             const SizedBox(height: 12),
 
