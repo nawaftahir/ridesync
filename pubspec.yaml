@@ -50,6 +50,7 @@ dependencies:
   battery_plus: ^7.1.2
   wakelock_plus: ^1.8.0
   flutter_local_notifications: ^23.0.3
+  flutter_compass: ^0.8.1
 
 hooks:
   user_defines:

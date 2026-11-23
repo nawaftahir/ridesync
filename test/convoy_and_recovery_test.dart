@@ -418,10 +418,12 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      // Wakelock enabled, heading uploaded, incoming alert + stale notifications fired.
+      // Wakelock enabled, heading uploaded, ongoing ride + incoming alert + stale notifications fired.
       expect(wakelock.lastEnabled, isTrue);
       expect(sentHeading, 180);
       expect(find.text('Bilal: Needs help!'), findsOneWidget);
+      expect(notifications.ongoingDestination, 'Daman-e-Koh');
+      expect(notifications.ongoingRideCode, 'UX1234');
       expect(
         notifications.shownTitles,
         containsAll(['Bilal: Need help', 'Bilal signal lost']),
@@ -434,21 +436,203 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Nawaf: Needs a fuel stop'), findsOneWidget);
 
-      // Ending the ride disables wakelock (dismiss snackbar covering End Ride).
+      // Ending the ride disables wakelock and cancels the ongoing notification.
       await tester.pump(const Duration(seconds: 5));
       await tester.pumpAndSettle();
       await tester.tap(find.text('End Ride'));
       await tester.pumpAndSettle();
       expect(wakelock.lastEnabled, isFalse);
+      expect(notifications.ongoingCancelled, isTrue);
+    },
+  );
+
+  testWidgets(
+    'Convoy notifications fire for rider join, fell behind, recovery, left, and End action',
+    (tester) async {
+      final notifications = _FakeNotificationService();
+      var pollStep = 0;
+
+      final client = MockClient((request) async {
+        if (request.method == 'POST' &&
+            request.url.path == '/rides/NTF123/end') {
+          return http.Response(jsonEncode({'is_ended': true}), 200);
+        }
+        if (request.method == 'POST' &&
+            request.url.path == '/rides/NTF123/position') {
+          return http.Response(jsonEncode({'ok': true}), 200);
+        }
+        if (request.method == 'GET' &&
+            request.url.path == '/rides/NTF123/positions') {
+          pollStep++;
+          if (pollStep == 1) {
+            return http.Response(
+              jsonEncode({
+                'code': 'NTF123',
+                'destination': 'Murree',
+                'is_ended': false,
+                'riders': [
+                  {
+                    'rider': {'id': 2, 'name': 'Bilal'},
+                    'latitude': 33.7216,
+                    'longitude': 73.0434,
+                    'speed_kmh': 30,
+                    'heading_degrees': 0,
+                    'battery_percent': 80,
+                    'age_seconds': 5,
+                    'is_stale': false,
+                  },
+                ],
+              }),
+              200,
+            );
+          }
+          if (pollStep == 2) {
+            // Zain joins far behind (>1.5km away), Bilal goes stale.
+            return http.Response(
+              jsonEncode({
+                'code': 'NTF123',
+                'destination': 'Murree',
+                'is_ended': false,
+                'riders': [
+                  {
+                    'rider': {'id': 2, 'name': 'Bilal'},
+                    'latitude': 33.7216,
+                    'longitude': 73.0434,
+                    'speed_kmh': 0,
+                    'heading_degrees': 0,
+                    'battery_percent': 80,
+                    'age_seconds': 90,
+                    'is_stale': true,
+                  },
+                  {
+                    'rider': {'id': 3, 'name': 'Zain'},
+                    'latitude': 33.7450,
+                    'longitude': 73.0433,
+                    'speed_kmh': 25,
+                    'heading_degrees': 0,
+                    'battery_percent': 60,
+                    'age_seconds': 2,
+                    'is_stale': false,
+                  },
+                ],
+              }),
+              200,
+            );
+          }
+          // Poll 3: Bilal recovers signal, Zain leaves.
+          return http.Response(
+            jsonEncode({
+              'code': 'NTF123',
+              'destination': 'Murree',
+              'is_ended': false,
+              'riders': [
+                {
+                  'rider': {'id': 2, 'name': 'Bilal'},
+                  'latitude': 33.7216,
+                  'longitude': 73.0434,
+                  'speed_kmh': 40,
+                  'heading_degrees': 0,
+                  'battery_percent': 79,
+                  'age_seconds': 2,
+                  'is_stale': false,
+                },
+              ],
+            }),
+            200,
+          );
+        }
+        return http.Response('Not found', 404);
+      });
+
+      final api = RideApiService(
+        baseUrl: 'https://api.example.com',
+        client: client,
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.light,
+          home: MainScreen(
+            apiService: api,
+            locationService: const _FixedLocationService(
+              GpsFix(point: LatLng(33.7215, 73.0433), speedKmh: 40),
+            ),
+            batteryService: const _FixedBatteryService(90),
+            notificationService: notifications,
+            initialActiveRide: const ActiveRide(
+              joinCode: 'NTF123',
+              destination: 'Murree',
+              isHost: true,
+              currentUserId: 1,
+              currentUserName: 'Nawaf',
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Advance through poll 2 (3s) and poll 3 (6s).
+      await tester.pump(const Duration(seconds: 3));
+      await tester.pumpAndSettle();
+      expect(
+        notifications.shownTitles,
+        containsAll([
+          'Zain joined the convoy',
+          'Zain fell behind',
+          'Bilal signal lost',
+        ]),
+      );
+
+      await tester.pump(const Duration(seconds: 3));
+      await tester.pumpAndSettle();
+      expect(
+        notifications.shownTitles,
+        containsAll(['Bilal is back online', 'Zain left the convoy']),
+      );
+
+      // Tapping End ride action from the ongoing notification ends the ride.
+      notifications.emitAction(NotificationService.actionEndRide);
+      await tester.pumpAndSettle();
+      expect(find.text('Ready to ride'), findsOneWidget);
+      expect(notifications.ongoingCancelled, isTrue);
     },
   );
 }
 
 class _FakeNotificationService extends NotificationService {
   final List<String> shownTitles = [];
+  final StreamController<String> _actions =
+      StreamController<String>.broadcast();
+  String? ongoingDestination;
+  String? ongoingRideCode;
+  bool ongoingCancelled = false;
+
+  @override
+  Stream<String> get actionStream => _actions.stream;
+
+  void emitAction(String action) => _actions.add(action);
 
   @override
   Future<void> initializeAndRequestPermission() async {}
+
+  @override
+  Future<void> showOngoingRideNotification({
+    required String destination,
+    required String rideCode,
+    required String summary,
+    required bool isHost,
+    required DateTime startedAt,
+    String? shortStatusChip,
+  }) async {
+    ongoingDestination = destination;
+    ongoingRideCode = rideCode;
+    ongoingCancelled = false;
+  }
+
+  @override
+  Future<void> cancelOngoingRideNotification() async {
+    ongoingCancelled = true;
+  }
 
   @override
   Future<void> showConvoyNotification({
@@ -456,6 +640,8 @@ class _FakeNotificationService extends NotificationService {
     required String title,
     required String body,
     bool urgent = false,
+    String? subText,
+    String? payload,
   }) async {
     shownTitles.add(title);
   }

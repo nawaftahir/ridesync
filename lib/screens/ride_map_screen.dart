@@ -75,9 +75,14 @@ class _RideMapScreenState extends State<RideMapScreen>
 
   StreamSubscription<GpsFix>? _positionSub;
   StreamSubscription<bool>? _serviceStatusSub;
+  StreamSubscription<double>? _compassSub;
   Timer? _syncTimer;
   LocationStatus _locationStatus = LocationStatus.checking;
   GpsFix? _myFix;
+  GpsFix? _prevRawFix;
+  DateTime? _prevRawFixAt;
+  double _smoothedSpeedKmh = 0;
+  double? _compassHeading;
   int? _myBatteryPercent;
   DateTime? _lastBatteryCheckedAt;
   List<RiderPosition> _liveRiders = const [];
@@ -88,14 +93,24 @@ class _RideMapScreenState extends State<RideMapScreen>
   bool _pausedIdleGps = false;
   bool _followMe = true;
   bool _hasInitialGpsCenter = false;
-  bool _isSheetCollapsed = false;
+  final DraggableScrollableController _sheetController =
+      DraggableScrollableController();
+  late final ValueNotifier<double> _sheetExtentNotifier = ValueNotifier<double>(
+    widget.activeRide != null ? 0.62 : 0.34,
+  );
   bool _bannerDismissed = false;
 
   // Convoy quick alert & notification state.
+  StreamSubscription<String>? _notificationActionSub;
+  DateTime? _rideStartedAt;
+  String? _ongoingNotifSignature;
+  bool _hasInitialConvoySnapshot = false;
+  final Map<int, String> _knownPeerNames = {};
   RideAlert? _activeAlert;
   int? _dismissedAlertId;
   int? _lastNotifiedAlertId;
   final Set<int> _notifiedStaleRiderIds = {};
+  final Set<int> _notifiedFarBehindRiderIds = {};
 
   // Map navigation state (bearing for compass needle, pitch for 2D/3D toggle).
   double _cameraBearing = 0;
@@ -132,15 +147,19 @@ class _RideMapScreenState extends State<RideMapScreen>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _listenServiceStatus();
+    _listenCompass();
+    _listenNotificationActions();
     _startLocationTracking();
     unawaited(widget.wakelockService.setEnabled(widget.activeRide != null));
-    if (_isLiveBackendRide) {
+    if (widget.activeRide != null) {
+      _rideStartedAt = DateTime.now();
       unawaited(widget.notificationService.initializeAndRequestPermission());
+      _syncOngoingRideNotification();
+      _refreshActiveRideRoute(force: true);
+    }
+    if (_isLiveBackendRide) {
       unawaited(_refreshBatteryPercent());
       _startBackendSync();
-    }
-    if (widget.activeRide != null) {
-      _refreshActiveRideRoute(force: true);
     }
   }
 
@@ -164,20 +183,39 @@ class _RideMapScreenState extends State<RideMapScreen>
     _activeAlert = null;
     _dismissedAlertId = null;
     _lastNotifiedAlertId = null;
+    _hasInitialConvoySnapshot = false;
+    _knownPeerNames.clear();
     _notifiedStaleRiderIds.clear();
+    _notifiedFarBehindRiderIds.clear();
     unawaited(widget.wakelockService.setEnabled(widget.activeRide != null));
+    final wasActive = oldWidget.activeRide != null;
+    final isActive = widget.activeRide != null;
     if (widget.activeRide != null) {
+      _rideStartedAt ??= DateTime.now();
       _previewPlace = null;
       _previewRoute = null;
       _isPickingOnMap = false;
+      _sheetExtentNotifier.value = 0.62;
+    } else {
+      _sheetExtentNotifier.value = 0.34;
     }
-    if (_isLiveBackendRide) {
-      unawaited(widget.notificationService.initializeAndRequestPermission());
-      unawaited(_refreshBatteryPercent());
-      _startBackendSync();
+    if (wasActive != isActive) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _sheetController.isAttached) {
+          _sheetController.jumpTo(isActive ? 0.62 : 0.34);
+        }
+      });
     }
     if (widget.activeRide != null) {
+      unawaited(widget.notificationService.initializeAndRequestPermission());
+      _syncOngoingRideNotification();
       _refreshActiveRideRoute(force: true);
+    } else {
+      _syncOngoingRideNotification();
+    }
+    if (_isLiveBackendRide) {
+      unawaited(_refreshBatteryPercent());
+      _startBackendSync();
     }
   }
 
@@ -185,10 +223,92 @@ class _RideMapScreenState extends State<RideMapScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     unawaited(widget.wakelockService.setEnabled(false));
+    unawaited(widget.notificationService.cancelOngoingRideNotification());
+    _notificationActionSub?.cancel();
     _positionSub?.cancel();
     _serviceStatusSub?.cancel();
+    _compassSub?.cancel();
+    _sheetController.dispose();
+    _sheetExtentNotifier.dispose();
     _stopBackendSync();
     super.dispose();
+  }
+
+  void _listenNotificationActions() {
+    _notificationActionSub = widget.notificationService.actionStream.listen((
+      action,
+    ) {
+      if (!mounted || widget.activeRide == null) return;
+      if (action == NotificationService.actionEndRide) {
+        widget.onEndRide();
+      } else if (action == NotificationService.actionOpenConvoy) {
+        unawaited(_openConvoy());
+      }
+    }, onError: (_) {});
+  }
+
+  void _syncOngoingRideNotification() {
+    final ride = widget.activeRide;
+    if (ride == null) {
+      _ongoingNotifSignature = null;
+      _rideStartedAt = null;
+      unawaited(widget.notificationService.cancelOngoingRideNotification());
+      return;
+    }
+
+    final startedAt = _rideStartedAt ??= DateTime.now();
+    final positions = _effectivePositions();
+    final staleCount = positions.where((p) => p.isStale).length;
+    final activeCount = positions.length - staleCount;
+    final etaMinutes = _activeRoute?.durationMinutes ?? ride.durationMinutes;
+    final distKm = _activeRoute?.distanceKm ?? ride.distanceKm;
+
+    final parts = <String>[
+      if (etaMinutes != null) '$etaMinutes min',
+      if (distKm != null) '${distKm.toStringAsFixed(1)} km',
+      if (positions.isEmpty)
+        'Sharing live location'
+      else if (activeCount == 1)
+        '1 rider live'
+      else
+        '$activeCount riders live',
+      if (staleCount > 0) '$staleCount signal lost',
+    ];
+    final summary = parts.join(' · ');
+    final shortChip = etaMinutes != null
+        ? '${etaMinutes}m'
+        : (positions.isEmpty ? ride.joinCode : '${activeCount}live');
+    final signature =
+        '${ride.joinCode}|${ride.destination}|${ride.isHost}|$summary|$shortChip';
+    if (signature == _ongoingNotifSignature) return;
+    _ongoingNotifSignature = signature;
+
+    unawaited(
+      widget.notificationService.showOngoingRideNotification(
+        destination: ride.destination,
+        rideCode: ride.joinCode,
+        summary: summary,
+        isHost: ride.isHost,
+        startedAt: startedAt,
+        shortStatusChip: shortChip,
+      ),
+    );
+  }
+
+  void _listenCompass() {
+    _compassSub = widget.locationService.compassHeadingStream().listen((
+      heading,
+    ) {
+      if (!mounted) return;
+      final prev = _compassHeading;
+      if (prev != null) {
+        final diff = ((heading - prev + 540) % 360) - 180;
+        if (diff.abs() < 4.0) return;
+      }
+      setState(() {
+        _compassHeading = heading;
+      });
+    }, onError: (_) {});
   }
 
   void _startBackendSync() {
@@ -302,12 +422,14 @@ class _RideMapScreenState extends State<RideMapScreen>
           _activeAlert = null;
         });
         widget.onRidersUpdated?.call(const []);
+        unawaited(widget.notificationService.cancelOngoingRideNotification());
         if (!ride.isHost) {
           unawaited(
             widget.notificationService.showConvoyNotification(
               id: 9001,
               title: 'Convoy ended',
               body: 'Ride $code was ended by the host.',
+              subText: 'Code $code',
             ),
           );
           ScaffoldMessenger.maybeOf(context)?.showSnackBar(
@@ -329,9 +451,48 @@ class _RideMapScreenState extends State<RideMapScreen>
             title: '${incomingAlert.senderName}: ${incomingAlert.title}',
             body: incomingAlert.message,
             urgent: incomingAlert.alertType == 'help',
+            subText: 'Code $code',
           ),
         );
       }
+
+      final currentPeers = <int, String>{};
+      for (final pos in snapshot.riders) {
+        if (pos.rider.id == ride.currentUserId) continue;
+        currentPeers[pos.rider.id] = pos.rider.name;
+      }
+
+      if (_hasInitialConvoySnapshot) {
+        for (final entry in currentPeers.entries) {
+          if (!_knownPeerNames.containsKey(entry.key)) {
+            unawaited(
+              widget.notificationService.showConvoyNotification(
+                id: 3000 + (entry.key % 1000),
+                title: '${entry.value} joined the convoy',
+                body:
+                    '${currentPeers.length + 1} riders active toward ${ride.destination}.',
+                subText: 'Code $code',
+              ),
+            );
+          }
+        }
+        for (final entry in _knownPeerNames.entries) {
+          if (!currentPeers.containsKey(entry.key)) {
+            unawaited(
+              widget.notificationService.showConvoyNotification(
+                id: 3000 + (entry.key % 1000),
+                title: '${entry.value} left the convoy',
+                body: 'No longer sharing live location in $code.',
+                subText: 'Code $code',
+              ),
+            );
+          }
+        }
+      }
+      _hasInitialConvoySnapshot = true;
+      _knownPeerNames
+        ..clear()
+        ..addAll(currentPeers);
 
       for (final pos in snapshot.riders) {
         if (pos.rider.id == ride.currentUserId) continue;
@@ -341,10 +502,41 @@ class _RideMapScreenState extends State<RideMapScreen>
               id: 2000 + (pos.rider.id % 1000),
               title: '${pos.rider.name} signal lost',
               body: 'No GPS update for over 60 seconds.',
+              subText: 'Code $code',
             ),
           );
-        } else if (!pos.isStale) {
-          _notifiedStaleRiderIds.remove(pos.rider.id);
+        } else if (!pos.isStale &&
+            _notifiedStaleRiderIds.remove(pos.rider.id)) {
+          unawaited(
+            widget.notificationService.showConvoyNotification(
+              id: 2000 + (pos.rider.id % 1000),
+              title: '${pos.rider.name} is back online',
+              body: 'Live GPS location resumed.',
+              subText: 'Code $code',
+            ),
+          );
+        }
+
+        if (!pos.isStale && _myFix != null) {
+          final distMeters = const Distance().as(
+            LengthUnit.Meter,
+            _myFix!.point,
+            pos.point,
+          );
+          if (distMeters >= 1500 &&
+              _notifiedFarBehindRiderIds.add(pos.rider.id)) {
+            unawaited(
+              widget.notificationService.showConvoyNotification(
+                id: 4000 + (pos.rider.id % 1000),
+                title: '${pos.rider.name} fell behind',
+                body:
+                    '${formatPlaceDistance(_myFix!.point, pos.point)} away from you.',
+                subText: 'Code $code',
+              ),
+            );
+          } else if (distMeters < 900) {
+            _notifiedFarBehindRiderIds.remove(pos.rider.id);
+          }
         }
       }
 
@@ -361,6 +553,7 @@ class _RideMapScreenState extends State<RideMapScreen>
           _remoteDestPoint = incomingDest;
         }
       });
+      _syncOngoingRideNotification();
       if (!hadDest && incomingDest != null) {
         _refreshActiveRideRoute(force: true);
       }
@@ -479,8 +672,55 @@ class _RideMapScreenState extends State<RideMapScreen>
     }
   }
 
-  void _onNewFix(GpsFix fix) {
+  GpsFix _calibrateFix(GpsFix rawFix) {
+    final now = rawFix.timestamp ?? DateTime.now();
+    final prev = _prevRawFix;
+    final prevAt = _prevRawFixAt;
+    _prevRawFix = rawFix;
+    _prevRawFixAt = now;
+
+    double instantKmh = rawFix.speedKmh;
+    double movedMeters = 0;
+    if (prev != null && prevAt != null) {
+      movedMeters = const Distance().as(
+        LengthUnit.Meter,
+        prev.point,
+        rawFix.point,
+      );
+      final dtSeconds = now.difference(prevAt).inMilliseconds / 1000.0;
+      if (!rawFix.hasReliableSpeed && dtSeconds >= 1.0 && dtSeconds <= 15.0) {
+        final fallbackKmh = (movedMeters / dtSeconds) * 3.6;
+        instantKmh = fallbackKmh < 1.5 ? 0.0 : fallbackKmh.clamp(0.0, 180.0);
+      }
+    }
+
+    if (instantKmh == 0.0 && movedMeters < 2.0) {
+      _smoothedSpeedKmh = 0.0;
+    } else {
+      _smoothedSpeedKmh = _smoothedSpeedKmh == 0.0
+          ? instantKmh
+          : (0.65 * instantKmh + 0.35 * _smoothedSpeedKmh);
+      if (_smoothedSpeedKmh < 1.5) {
+        _smoothedSpeedKmh = 0.0;
+      }
+    }
+
+    final heading = (rawFix.headingDegrees > 0 && _smoothedSpeedKmh >= 5.0)
+        ? rawFix.headingDegrees
+        : (_compassHeading ?? rawFix.headingDegrees);
+
+    return GpsFix(
+      point: rawFix.point,
+      speedKmh: _smoothedSpeedKmh,
+      headingDegrees: heading,
+      timestamp: now,
+      hasReliableSpeed: true,
+    );
+  }
+
+  void _onNewFix(GpsFix rawFix) {
     if (!mounted) return;
+    final fix = _calibrateFix(rawFix);
     setState(() {
       _locationStatus = LocationStatus.ready;
       _myFix = fix;
@@ -744,6 +984,7 @@ class _RideMapScreenState extends State<RideMapScreen>
     setState(() {
       _activeRoute = route;
     });
+    _syncOngoingRideNotification();
   }
 
   void _fitCameraToPoints(List<LatLng> points) {
@@ -950,6 +1191,9 @@ class _RideMapScreenState extends State<RideMapScreen>
           myPoint: _myFix?.point,
           rideCode: ride?.joinCode,
           destination: ride?.destination,
+          crewName: ride?.crewName,
+          crewMembers: ride?.crewMembers ?? const [],
+          currentUserIsHost: ride?.isHost ?? false,
         ),
       ),
     );
@@ -967,11 +1211,12 @@ class _RideMapScreenState extends State<RideMapScreen>
     required Color labelColor,
     double headingDegrees = 0,
     bool showHeading = false,
+    bool isCurrentUser = false,
   }) {
     final colors = Theme.of(context).colorScheme;
     return Marker(
       point: _toGeographic(point),
-      size: const Size(108, 62),
+      size: Size(108, isCurrentUser ? 82 : 62),
       alignment: Alignment.bottomCenter,
       child: Tooltip(
         message: tooltip,
@@ -998,11 +1243,19 @@ class _RideMapScreenState extends State<RideMapScreen>
             ),
             const SizedBox(height: 2),
             SizedBox(
-              width: 28,
-              height: 28,
+              width: isCurrentUser ? 48 : 28,
+              height: isCurrentUser ? 48 : 28,
               child: Stack(
                 alignment: Alignment.center,
                 children: [
+                  if (isCurrentUser && showHeading)
+                    Transform.rotate(
+                      angle: (headingDegrees - _cameraBearing) * math.pi / 180,
+                      child: CustomPaint(
+                        size: const Size(48, 48),
+                        painter: _DirectionConePainter(color: dotColor),
+                      ),
+                    ),
                   Container(
                     width: 24,
                     height: 24,
@@ -1011,7 +1264,7 @@ class _RideMapScreenState extends State<RideMapScreen>
                       shape: BoxShape.circle,
                     ),
                   ),
-                  if (showHeading)
+                  if (!isCurrentUser && showHeading)
                     Transform.rotate(
                       angle: (headingDegrees - _cameraBearing) * math.pi / 180,
                       child: Transform.translate(
@@ -1024,8 +1277,8 @@ class _RideMapScreenState extends State<RideMapScreen>
                       ),
                     ),
                   Container(
-                    width: 14,
-                    height: 14,
+                    width: isCurrentUser ? 15 : 14,
+                    height: isCurrentUser ? 15 : 14,
                     decoration: BoxDecoration(
                       color: dotColor,
                       shape: BoxShape.circle,
@@ -1154,6 +1407,13 @@ class _RideMapScreenState extends State<RideMapScreen>
 
     final fix = _myFix;
     if (fix != null) {
+      final myHeading = (fix.speedKmh >= 5.0 && fix.headingDegrees > 0)
+          ? fix.headingDegrees
+          : (_compassHeading ?? fix.headingDegrees);
+      final showMyHeading =
+          _compassHeading != null ||
+          fix.headingDegrees > 0 ||
+          fix.speedKmh >= 3;
       markers.add(
         _buildRiderMarker(
           context,
@@ -1163,8 +1423,9 @@ class _RideMapScreenState extends State<RideMapScreen>
           dotColor: colors.primary,
           pillColor: colors.primary,
           labelColor: colors.onPrimary,
-          headingDegrees: fix.headingDegrees,
-          showHeading: fix.headingDegrees > 0 || fix.speedKmh >= 3,
+          headingDegrees: myHeading,
+          showHeading: showMyHeading,
+          isCurrentUser: true,
         ),
       );
     }
@@ -1286,16 +1547,6 @@ class _RideMapScreenState extends State<RideMapScreen>
                             onShareOverride: widget.onShareOverride,
                           ),
                   ),
-                  if (ride == null &&
-                      _previewPlace == null &&
-                      !_isPickingOnMap &&
-                      widget.searchService != null) ...[
-                    const SizedBox(height: 8),
-                    _MapCategoryChipBar(
-                      onSelected: (category) =>
-                          _openPlaceSearch(initialCategory: category),
-                    ),
-                  ],
                   if (_isPickingOnMap && ride == null) ...[
                     const SizedBox(height: 8),
                     _PickOnMapBanner(
@@ -1421,24 +1672,22 @@ class _RideMapScreenState extends State<RideMapScreen>
           ),
 
           // Bottom attribution chip + sheet with "Group ride" status & actions.
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: 0,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                // Kept above the bottom sheet on the left so credits never overlap
-                // right-side map controls on compact screens.
-                Padding(
-                  padding: const EdgeInsets.only(left: 12, bottom: 6),
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: const _MapAttributionChip(),
+          if (ride == null && _previewPlace != null)
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.only(left: 12, bottom: 6),
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: const _MapAttributionChip(),
+                    ),
                   ),
-                ),
-                if (ride == null && _previewPlace != null)
                   _PreviewDestinationCard(
                     place: _previewPlace!,
                     route: _previewRoute,
@@ -1457,26 +1706,71 @@ class _RideMapScreenState extends State<RideMapScreen>
                       }
                     },
                     onClose: _clearPreview,
-                  )
-                else
-                  _MapBottomSheet(
-                    activeRide: ride,
-                    routePreview: _activeRoute,
-                    positions: positions,
-                    isCollapsed: _isSheetCollapsed,
-                    onToggleCollapse: () {
-                      setState(() {
-                        _isSheetCollapsed = !_isSheetCollapsed;
-                      });
-                    },
-                    onOpenConvoy: _openConvoy,
-                    onEndRide: widget.onEndRide,
-                    onHostRide: widget.onHostRide,
-                    onJoinRide: widget.onJoinRide,
                   ),
-              ],
+                ],
+              ),
+            )
+          else
+            Positioned.fill(
+              child: LayoutBuilder(
+                builder: (context, constraints) => Stack(
+                  children: [
+                    ValueListenableBuilder<double>(
+                      valueListenable: _sheetExtentNotifier,
+                      builder: (context, extent, child) => Positioned(
+                        left: 12,
+                        bottom: constraints.maxHeight * extent + 8,
+                        child: child!,
+                      ),
+                      child: const _MapAttributionChip(),
+                    ),
+                    NotificationListener<DraggableScrollableNotification>(
+                      onNotification: (notification) {
+                        _sheetExtentNotifier.value = notification.extent;
+                        return false;
+                      },
+                      child: DraggableScrollableSheet(
+                        controller: _sheetController,
+                        initialChildSize: ride != null ? 0.62 : 0.34,
+                        minChildSize: 0.13,
+                        maxChildSize: 0.72,
+                        snap: true,
+                        snapSizes: ride != null
+                            ? const [0.13, 0.62]
+                            : const [0.13, 0.34],
+                        builder: (context, scrollController) {
+                          final expandedSize = ride != null ? 0.62 : 0.34;
+                          return _MapBottomSheet(
+                            scrollController: scrollController,
+                            activeRide: ride,
+                            routePreview: _activeRoute,
+                            positions: positions,
+                            onToggleCollapse: () {
+                              final currentSize = _sheetController.isAttached
+                                  ? _sheetController.size
+                                  : expandedSize;
+                              final target = currentSize <= 0.18
+                                  ? expandedSize
+                                  : 0.13;
+                              _sheetExtentNotifier.value = target;
+                              _sheetController.animateTo(
+                                target,
+                                duration: const Duration(milliseconds: 240),
+                                curve: Curves.easeOutCubic,
+                              );
+                            },
+                            onOpenConvoy: _openConvoy,
+                            onEndRide: widget.onEndRide,
+                            onHostRide: widget.onHostRide,
+                            onJoinRide: widget.onJoinRide,
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ),
-          ),
         ],
       ),
     );
@@ -1533,60 +1827,6 @@ class _ConvoyAlertBanner extends StatelessWidget {
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-// Floating Google Maps-style category pill strip below the map search bar.
-class _MapCategoryChipBar extends StatelessWidget {
-  const _MapCategoryChipBar({required this.onSelected});
-
-  final ValueChanged<SearchCategory> onSelected;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
-    return SizedBox(
-      height: 36,
-      child: ListView.separated(
-        scrollDirection: Axis.horizontal,
-        itemCount: kRiderSearchCategories.length,
-        separatorBuilder: (_, _) => const SizedBox(width: 8),
-        itemBuilder: (context, index) {
-          final category = kRiderSearchCategories[index];
-          return Material(
-            color: colors.surfaceContainerLow,
-            elevation: 2,
-            shadowColor: Colors.black.withValues(alpha: 0.16),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(18),
-              side: BorderSide(color: colors.outlineVariant),
-            ),
-            child: InkWell(
-              borderRadius: BorderRadius.circular(18),
-              onTap: () => onSelected(category),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(category.icon, size: 16, color: colors.primary),
-                    const SizedBox(width: 6),
-                    Text(
-                      category.label,
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w700,
-                        color: colors.onSurface,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          );
-        },
       ),
     );
   }
@@ -2186,10 +2426,10 @@ class _MapActionButton extends StatelessWidget {
 // Rounded bottom sheet matching the DesignArtifact.html layout.
 class _MapBottomSheet extends StatelessWidget {
   const _MapBottomSheet({
+    required this.scrollController,
     required this.activeRide,
     required this.routePreview,
     required this.positions,
-    required this.isCollapsed,
     required this.onToggleCollapse,
     required this.onOpenConvoy,
     required this.onEndRide,
@@ -2197,10 +2437,10 @@ class _MapBottomSheet extends StatelessWidget {
     required this.onJoinRide,
   });
 
+  final ScrollController scrollController;
   final ActiveRide? activeRide;
   final RoutePreview? routePreview;
   final List<RiderPosition> positions;
-  final bool isCollapsed;
   final VoidCallback onToggleCollapse;
   final VoidCallback onOpenConvoy;
   final VoidCallback onEndRide;
@@ -2224,79 +2464,115 @@ class _MapBottomSheet extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
-    final maxHeight = MediaQuery.sizeOf(context).height * 0.6;
     final ride = activeRide;
 
     return Material(
       color: colors.surfaceContainerLow,
-      elevation: 8,
-      shadowColor: Colors.black.withValues(alpha: 0.24),
+      elevation: 10,
+      shadowColor: Colors.black.withValues(alpha: 0.26),
       shape: RoundedRectangleBorder(
         borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
-        side: BorderSide(color: colors.outlineVariant),
+        side: BorderSide(color: colors.outlineVariant.withValues(alpha: 0.8)),
       ),
       clipBehavior: Clip.antiAlias,
-      child: ConstrainedBox(
-        constraints: BoxConstraints(maxHeight: maxHeight),
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(20, 10, 20, 16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              // Drag handle — tap or swipe vertically to collapse or expand.
-              GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: onToggleCollapse,
-                onVerticalDragEnd: (details) {
-                  final velocity = details.primaryVelocity;
-                  if (velocity == null) return;
-                  if (velocity > 100 && !isCollapsed) {
-                    onToggleCollapse();
-                  } else if (velocity < -100 && isCollapsed) {
-                    onToggleCollapse();
-                  }
-                },
-                child: Column(
+      child: ListView(
+        controller: scrollController,
+        physics: const ClampingScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(18, 8, 18, 14),
+        children: [
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: onToggleCollapse,
+            child: Column(
+              children: [
+                Center(
+                  child: Container(
+                    width: 44,
+                    height: 4.5,
+                    margin: const EdgeInsets.only(bottom: 10),
+                    decoration: BoxDecoration(
+                      color: colors.outlineVariant,
+                      borderRadius: BorderRadius.circular(3),
+                    ),
+                  ),
+                ),
+                Row(
                   children: [
-                    Center(
-                      child: Container(
-                        width: 36,
-                        height: 4,
-                        margin: const EdgeInsets.only(bottom: 12),
-                        decoration: BoxDecoration(
-                          color: colors.outlineVariant,
-                          borderRadius: BorderRadius.circular(2),
+                    Container(
+                      width: 34,
+                      height: 34,
+                      decoration: BoxDecoration(
+                        color: ride != null
+                            ? colors.primaryContainer
+                            : colors.surfaceContainerHighest,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Icon(
+                        Icons.two_wheeler_rounded,
+                        size: 18,
+                        color: ride != null
+                            ? colors.onPrimaryContainer
+                            : colors.onSurfaceVariant,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        ride == null ? 'Ready to ride' : 'Group ride',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: -0.4,
                         ),
                       ),
                     ),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            ride == null ? 'Ready to ride' : 'Group ride',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              fontSize: 22,
-                              fontWeight: FontWeight.w800,
-                              letterSpacing: -0.4,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        _StatusPill(isLive: ride != null),
-                      ],
-                    ),
+                    const SizedBox(width: 8),
+                    _StatusPill(isLive: ride != null),
                   ],
                 ),
-              ),
+              ],
+            ),
+          ),
 
-              if (!isCollapsed && ride != null) ...[
-                const SizedBox(height: 12),
-                InkWell(
-                  borderRadius: BorderRadius.circular(12),
-                  onTap: onOpenConvoy,
+          if (ride != null) ...[
+            if (ride.crewName != null && ride.crewName!.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: colors.secondaryContainer,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Text(
+                    ride.crewName!,
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w800,
+                      color: colors.onSecondaryContainer,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+            const SizedBox(height: 12),
+            Material(
+              color: colors.surfaceContainerHighest.withValues(alpha: 0.6),
+              borderRadius: BorderRadius.circular(16),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(16),
+                onTap: onOpenConvoy,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 10,
+                  ),
                   child: Row(
                     children: [
                       _RiderAvatarStack(positions: positions),
@@ -2309,7 +2585,14 @@ class _MapBottomSheet extends StatelessWidget {
                               positions.isEmpty
                                   ? 'Convoy'
                                   : positions
-                                        .map((p) => p.rider.name)
+                                        .map(
+                                          (p) =>
+                                              ride.currentUserId != null &&
+                                                  p.rider.id ==
+                                                      ride.currentUserId
+                                              ? '${p.rider.name} (You)'
+                                              : p.rider.name,
+                                        )
                                         .join(', '),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
@@ -2329,54 +2612,164 @@ class _MapBottomSheet extends StatelessWidget {
                           ],
                         ),
                       ),
-                      Icon(Icons.chevron_right, color: colors.onSurfaceVariant),
+                      Icon(
+                        Icons.chevron_right_rounded,
+                        color: colors.onSurfaceVariant,
+                      ),
                     ],
                   ),
                 ),
-                const SizedBox(height: 12),
-                _RouteSummaryCard(ride: ride, routePreview: routePreview),
-                const SizedBox(height: 12),
-                FilledButton.tonal(
-                  style: FilledButton.styleFrom(
-                    minimumSize: const Size.fromHeight(48),
-                    backgroundColor: colors.errorContainer,
-                    foregroundColor: colors.onErrorContainer,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16),
-                    ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            _RouteSummaryCard(ride: ride, routePreview: routePreview),
+            const SizedBox(height: 12),
+            FilledButton.tonal(
+              style: FilledButton.styleFrom(
+                minimumSize: const Size.fromHeight(46),
+                backgroundColor: colors.errorContainer,
+                foregroundColor: colors.onErrorContainer,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                ),
+              ),
+              onPressed: onEndRide,
+              child: Text(ride.isHost ? 'End Ride' : 'Leave'),
+            ),
+          ],
+
+          if (ride == null) ...[
+            const SizedBox(height: 14),
+            Row(
+              children: [
+                Expanded(
+                  child: _SheetActionCard(
+                    icon: Icons.add_road_rounded,
+                    title: 'Host a ride',
+                    subtitle: 'Share live code',
+                    filled: true,
+                    onTap: onHostRide,
                   ),
-                  onPressed: onEndRide,
-                  child: Text(ride.isHost ? 'End Ride' : 'Leave'),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: _SheetActionCard(
+                    icon: Icons.group_add_rounded,
+                    title: 'Join code',
+                    subtitle: 'Enter 6-char code',
+                    filled: false,
+                    onTap: onJoinRide,
+                  ),
                 ),
               ],
-
-              if (!isCollapsed && ride == null) ...[
-                const SizedBox(height: 8),
-                Text(
-                  'Search above, long-press the map to drop a pin, or join with a code.',
-                  style: TextStyle(color: colors.onSurfaceVariant),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  Icons.touch_app_outlined,
+                  size: 14,
+                  color: colors.onSurfaceVariant,
                 ),
-                const SizedBox(height: 14),
-                Row(
+                const SizedBox(width: 6),
+                Flexible(
+                  child: Text(
+                    'Tap search above or hold the map to set a route',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: colors.onSurfaceVariant,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _SheetActionCard extends StatelessWidget {
+  const _SheetActionCard({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.filled,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final bool filled;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final bg = filled ? colors.primaryContainer : colors.surfaceContainerHigh;
+    final fg = filled ? colors.onPrimaryContainer : colors.onSurface;
+    final sub = filled ? colors.onPrimaryContainer : colors.onSurfaceVariant;
+
+    return Material(
+      color: bg,
+      shape: filled
+          ? RoundedRectangleBorder(borderRadius: BorderRadius.circular(18))
+          : RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(18),
+              side: BorderSide(color: colors.outlineVariant),
+            ),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          child: Row(
+            children: [
+              CircleAvatar(
+                radius: 17,
+                backgroundColor: filled
+                    ? colors.primary
+                    : colors.surfaceContainerLow,
+                child: Icon(
+                  icon,
+                  size: 18,
+                  color: filled ? colors.onPrimary : colors.primary,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Expanded(
-                      child: FilledButton.icon(
-                        onPressed: onHostRide,
-                        icon: const Icon(Icons.add_road),
-                        label: const Text('Host a ride'),
+                    Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w800,
+                        color: fg,
                       ),
                     ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: onJoinRide,
-                        icon: const Icon(Icons.group_add),
-                        label: const Text('Join code'),
+                    Text(
+                      subtitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: sub.withValues(alpha: 0.85),
                       ),
                     ),
                   ],
                 ),
-              ],
+              ),
             ],
           ),
         ),
@@ -2610,4 +3003,30 @@ class _RouteSummaryCard extends StatelessWidget {
       ),
     );
   }
+}
+
+// Draws a Google Maps-style directional vision cone pointing upward (0° North).
+class _DirectionConePainter extends CustomPainter {
+  const _DirectionConePainter({required this.color});
+
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final radius = size.width / 2;
+    final rect = Rect.fromCircle(center: center, radius: radius);
+    final paint = Paint()
+      ..shader = RadialGradient(
+        colors: [color.withValues(alpha: 0.48), color.withValues(alpha: 0.0)],
+      ).createShader(rect);
+
+    const sweep = math.pi / 3; // 60° field-of-view beam
+    final startAngle = -math.pi / 2 - sweep / 2;
+    canvas.drawArc(rect, startAngle, sweep, true, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _DirectionConePainter oldDelegate) =>
+      oldDelegate.color != color;
 }

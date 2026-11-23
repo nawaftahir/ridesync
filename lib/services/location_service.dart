@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_compass/flutter_compass.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 
@@ -22,22 +23,32 @@ class GpsFix {
     required this.point,
     required this.speedKmh,
     this.headingDegrees = 0,
+    this.timestamp,
+    this.hasReliableSpeed = true,
   });
 
   final LatLng point;
   final double speedKmh;
   final double headingDegrees;
+  final DateTime? timestamp;
+  final bool hasReliableSpeed;
 
   factory GpsFix.fromPosition(Position position) {
     // Geolocator reports speed in m/s and heading in degrees (negative when unknown).
-    final speedMetersPerSec = position.speed < 0 ? 0.0 : position.speed;
+    final speedAccuracyBad = position.speedAccuracy > 5.0;
+    final hasSpeed = position.speed >= 0 && !speedAccuracyBad;
+    final rawKmh = hasSpeed ? position.speed * 3.6 : 0.0;
+    // Clamp tiny GPS drift (< 1.5 km/h) to 0 so a parked bike reads 0 km/h.
+    final speedKmh = rawKmh < 1.5 ? 0.0 : rawKmh;
     final heading = position.heading < 0 || position.heading > 360
         ? 0.0
         : position.heading;
     return GpsFix(
       point: LatLng(position.latitude, position.longitude),
-      speedKmh: speedMetersPerSec * 3.6,
+      speedKmh: speedKmh,
       headingDegrees: heading,
+      timestamp: position.timestamp,
+      hasReliableSpeed: hasSpeed,
     );
   }
 }
@@ -109,6 +120,24 @@ class LocationService {
       return const Stream<bool>.empty();
     } on Exception {
       return const Stream<bool>.empty();
+    }
+  }
+
+  // Emits device compass heading in degrees (0..360) so the "You" marker
+  // points where your phone is facing even when stationary.
+  Stream<double> compassHeadingStream() {
+    try {
+      final events = FlutterCompass.events;
+      if (events == null) return const Stream<double>.empty();
+      return events
+          .where((event) => event.heading != null)
+          .map((event) => ((event.heading! % 360) + 360) % 360);
+    } on MissingPluginException {
+      return const Stream<double>.empty();
+    } on UnsupportedError {
+      return const Stream<double>.empty();
+    } on Exception {
+      return const Stream<double>.empty();
     }
   }
 

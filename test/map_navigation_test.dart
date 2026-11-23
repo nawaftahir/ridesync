@@ -23,6 +23,9 @@ void main() {
       );
       await tester.pumpAndSettle();
 
+      await tester.tap(find.text('Explore live map'));
+      await tester.pumpAndSettle();
+
       var map = tester.widget<MapLibreMap>(find.byType(MapLibreMap));
       expect(
         map.options.style,
@@ -53,6 +56,9 @@ void main() {
     '3D tilt toggle, compass reset-to-North, and zoom buttons work cleanly',
     (tester) async {
       await tester.pumpWidget(const RideSyncApp());
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Explore live map'));
       await tester.pumpAndSettle();
 
       final state = fakeMap.latestState!;
@@ -144,14 +150,19 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('PICKUP'), findsOneWidget);
+      final expandedY = tester.getTopLeft(find.text('Group ride')).dy;
 
       await tester.fling(find.text('Group ride'), const Offset(0, 120), 600);
       await tester.pumpAndSettle();
-      expect(find.text('PICKUP'), findsNothing);
+      final collapsedY = tester.getTopLeft(find.text('Group ride')).dy;
+      expect(collapsedY, greaterThan(expandedY));
 
       await tester.fling(find.text('Group ride'), const Offset(0, -120), 600);
       await tester.pumpAndSettle();
-      expect(find.text('PICKUP'), findsOneWidget);
+      expect(
+        tester.getTopLeft(find.text('Group ride')).dy,
+        lessThan(collapsedY),
+      );
     },
   );
 }
