@@ -11,12 +11,14 @@ class RiderTile extends StatelessWidget {
     super.key,
     required this.position,
     this.isCurrentUser = false,
+    this.isHost = false,
     this.myPoint,
     this.onTap,
   });
 
   final RiderPosition position;
   final bool isCurrentUser;
+  final bool isHost;
   final LatLng? myPoint;
   final VoidCallback? onTap;
 
@@ -98,6 +100,42 @@ class RiderTile extends StatelessWidget {
                 style: const TextStyle(fontWeight: FontWeight.w700),
               ),
             ),
+            if (isCurrentUser) ...[
+              const SizedBox(width: 6),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                decoration: BoxDecoration(
+                  color: colors.primaryContainer,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  'You',
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w800,
+                    color: colors.onPrimaryContainer,
+                  ),
+                ),
+              ),
+            ],
+            if (isHost) ...[
+              const SizedBox(width: 6),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                decoration: BoxDecoration(
+                  color: colors.secondaryContainer,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  'Host',
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w800,
+                    color: colors.onSecondaryContainer,
+                  ),
+                ),
+              ),
+            ],
             if (_isFarBehind) ...[
               const SizedBox(width: 8),
               Container(

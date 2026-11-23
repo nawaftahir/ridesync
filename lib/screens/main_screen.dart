@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:ridesync/models/active_ride.dart';
 import 'package:ridesync/models/rider_position.dart';
+import 'package:ridesync/models/riding_crew.dart';
 import 'package:ridesync/screens/group_screen.dart';
 import 'package:ridesync/screens/host_ride_screen.dart';
 import 'package:ridesync/screens/join_ride_screen.dart';
@@ -34,6 +35,7 @@ class MainScreen extends StatefulWidget {
     this.mapSearchService,
     this.initialServerUrl,
     this.initialActiveRide,
+    this.initialTabIndex = 0,
     this.themeMode = ThemeMode.system,
     this.onThemeModeChanged,
   });
@@ -47,6 +49,7 @@ class MainScreen extends StatefulWidget {
   final MapSearchService? mapSearchService;
   final String? initialServerUrl;
   final ActiveRide? initialActiveRide;
+  final int initialTabIndex;
   final ThemeMode themeMode;
   final ValueChanged<ThemeMode>? onThemeModeChanged;
 
@@ -75,6 +78,7 @@ class _MainScreenState extends State<MainScreen> {
   void initState() {
     super.initState();
     _activeRide = widget.initialActiveRide;
+    _selectedIndex = _activeRide != null ? 0 : widget.initialTabIndex;
     _serverUrl =
         widget.apiService?.cleanBaseUrl ??
         widget.initialServerUrl ??
@@ -99,6 +103,7 @@ class _MainScreenState extends State<MainScreen> {
     if (!mounted || savedRide == null || _activeRide != null) return;
     setState(() {
       _activeRide = savedRide;
+      _selectedIndex = 0;
     });
   }
 
@@ -164,6 +169,7 @@ class _MainScreenState extends State<MainScreen> {
       }
       if (savedRide != null && _activeRide == null) {
         _activeRide = savedRide;
+        _selectedIndex = 0;
         changed = true;
       }
       if (changed) {
@@ -205,10 +211,13 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   // Opens HostRideScreen or JoinRideScreen and switches to Map when a ride starts.
-  Future<void> _openRideFlow(Widget screen) async {
-    final ride = await Navigator.of(context)
+  Future<void> _openRideFlow(Widget screen, {RidingCrew? crew}) async {
+    final pickedRide = await Navigator.of(context)
         .push<ActiveRide>(MaterialPageRoute(builder: (_) => screen));
-    if (!mounted || ride == null) return;
+    if (!mounted || pickedRide == null) return;
+    final ride = crew == null
+        ? pickedRide
+        : pickedRide.copyWith(crewName: crew.name, crewMembers: crew.members);
     setState(() {
       _activeRide = ride;
       _liveRiders = const [];
@@ -221,6 +230,7 @@ class _MainScreenState extends State<MainScreen> {
     PlaceResult? initialPlace,
     RoutePreview? initialRoute,
     LatLng? nearPoint,
+    RidingCrew? crew,
   }) {
     return _openRideFlow(
       HostRideScreen(
@@ -231,6 +241,7 @@ class _MainScreenState extends State<MainScreen> {
         initialRoute: initialRoute,
         nearPoint: nearPoint,
       ),
+      crew: crew,
     );
   }
 
@@ -315,6 +326,7 @@ class _MainScreenState extends State<MainScreen> {
             riders: _liveRiders,
             serverBaseUrl: _apiService.cleanBaseUrl,
             onHostRide: () => _openHostRide(),
+            onHostCrewRide: (crew) => _openHostRide(crew: crew),
           ),
           ProfileScreen(
             themeMode: widget.themeMode,

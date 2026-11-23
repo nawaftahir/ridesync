@@ -14,6 +14,8 @@ class ActiveRide {
     this.durationMinutes,
     this.currentUserId,
     this.currentUserName = 'Rider',
+    this.crewName,
+    this.crewMembers = const [],
   });
 
   final String joinCode;
@@ -29,8 +31,28 @@ class ActiveRide {
   final int? currentUserId;
   final String currentUserName;
 
+  // Optional riding crew context when started from the Group tab.
+  final String? crewName;
+  final List<String> crewMembers;
+
   LatLng? get destinationPoint =>
       (destLat != null && destLng != null) ? LatLng(destLat!, destLng!) : null;
+
+  ActiveRide copyWith({String? crewName, List<String>? crewMembers}) =>
+      ActiveRide(
+        joinCode: joinCode,
+        destination: destination,
+        isHost: isHost,
+        destLat: destLat,
+        destLng: destLng,
+        pickupLabel: pickupLabel,
+        distanceKm: distanceKm,
+        durationMinutes: durationMinutes,
+        currentUserId: currentUserId,
+        currentUserName: currentUserName,
+        crewName: crewName ?? this.crewName,
+        crewMembers: crewMembers ?? this.crewMembers,
+      );
 
   Map<String, dynamic> toJson() => {
     'joinCode': joinCode,
@@ -43,6 +65,8 @@ class ActiveRide {
     if (durationMinutes != null) 'durationMinutes': durationMinutes,
     if (currentUserId != null) 'currentUserId': currentUserId,
     'currentUserName': currentUserName,
+    if (crewName != null && crewName!.isNotEmpty) 'crewName': crewName,
+    if (crewMembers.isNotEmpty) 'crewMembers': crewMembers,
   };
 
   static ActiveRide? fromJson(Map<String, dynamic> json) {
@@ -55,6 +79,10 @@ class ActiveRide {
         isHost is! bool) {
       return null;
     }
+    final rawMembers = json['crewMembers'];
+    final members = rawMembers is List
+        ? rawMembers.whereType<String>().toList(growable: false)
+        : const <String>[];
     return ActiveRide(
       joinCode: code.trim().toUpperCase(),
       destination: dest,
@@ -66,6 +94,8 @@ class ActiveRide {
       durationMinutes: (json['durationMinutes'] as num?)?.toInt(),
       currentUserId: (json['currentUserId'] as num?)?.toInt(),
       currentUserName: (json['currentUserName'] as String?) ?? 'Rider',
+      crewName: json['crewName'] as String?,
+      crewMembers: members,
     );
   }
 }

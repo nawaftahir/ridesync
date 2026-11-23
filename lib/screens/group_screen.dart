@@ -14,6 +14,7 @@ class GroupScreen extends StatefulWidget {
     required this.riders,
     this.serverBaseUrl,
     this.onHostRide,
+    this.onHostCrewRide,
     this.onShareOverride,
     this.preferences,
   });
@@ -22,6 +23,7 @@ class GroupScreen extends StatefulWidget {
   final List<RiderPosition> riders;
   final String? serverBaseUrl;
   final VoidCallback? onHostRide;
+  final ValueChanged<RidingCrew>? onHostCrewRide;
   final RideShareHandler? onShareOverride;
   final AppPreferences? preferences;
 
@@ -123,13 +125,25 @@ class _GroupScreenState extends State<GroupScreen> {
                                 ),
                               ),
                               Text(
-                                ride.destination,
+                                ride.crewName != null &&
+                                        ride.crewName!.isNotEmpty
+                                    ? '${ride.crewName} · ${ride.destination}'
+                                    : ride.destination,
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: TextStyle(
                                   color: colors.onPrimaryContainer,
                                 ),
                               ),
+                              if (widget.riders.isNotEmpty)
+                                Text(
+                                  '${widget.riders.where((r) => !r.isStale).length}/${widget.riders.length} riders live',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w700,
+                                    color: colors.onPrimaryContainer,
+                                  ),
+                                ),
                             ],
                           ),
                         ),
@@ -182,6 +196,9 @@ class _GroupScreenState extends State<GroupScreen> {
                                   currentUserId: ride.currentUserId,
                                   rideCode: ride.joinCode,
                                   destination: ride.destination,
+                                  crewName: ride.crewName,
+                                  crewMembers: ride.crewMembers,
+                                  currentUserIsHost: ride.isHost,
                                 ),
                               ),
                             ),
@@ -333,10 +350,13 @@ class _GroupScreenState extends State<GroupScreen> {
                           ],
                         ),
                       ],
-                      if (widget.onHostRide != null) ...[
+                      if (widget.onHostCrewRide != null ||
+                          widget.onHostRide != null) ...[
                         const SizedBox(height: 12),
                         FilledButton.tonalIcon(
-                          onPressed: widget.onHostRide,
+                          onPressed: widget.onHostCrewRide != null
+                              ? () => widget.onHostCrewRide!(crew)
+                              : widget.onHostRide,
                           icon: const Icon(Icons.add_road, size: 18),
                           label: const Text('Start Ride with Crew'),
                         ),

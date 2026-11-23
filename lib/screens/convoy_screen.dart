@@ -14,6 +14,9 @@ class ConvoyScreen extends StatelessWidget {
     this.myPoint,
     this.rideCode,
     this.destination,
+    this.crewName,
+    this.crewMembers = const [],
+    this.currentUserIsHost = false,
   });
 
   final List<RiderPosition> riders;
@@ -21,12 +24,21 @@ class ConvoyScreen extends StatelessWidget {
   final LatLng? myPoint;
   final String? rideCode;
   final String? destination;
+  final String? crewName;
+  final List<String> crewMembers;
+  final bool currentUserIsHost;
 
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     final staleCount = riders.where((r) => r.isStale).length;
     final activeCount = riders.length - staleCount;
+    final joinedNames = riders
+        .map((r) => r.rider.name.trim().toLowerCase())
+        .toSet();
+    final pendingCrewMembers = crewMembers
+        .where((m) => !joinedNames.contains(m.trim().toLowerCase()))
+        .toList(growable: false);
 
     return Scaffold(
       appBar: AppBar(title: const Text('Convoy')),
@@ -75,6 +87,7 @@ class ConvoyScreen extends StatelessWidget {
                                 Text(
                                   '$activeCount active'
                                   '${staleCount > 0 ? ' · $staleCount signal lost' : ''}'
+                                  '${crewName != null && crewName!.isNotEmpty ? ' · $crewName' : ''}'
                                   '${rideCode != null ? ' · Code $rideCode' : ''}',
                                   style: TextStyle(
                                     fontSize: 12,
@@ -113,9 +126,36 @@ class ConvoyScreen extends StatelessWidget {
                     isCurrentUser:
                         currentUserId != null &&
                         position.rider.id == currentUserId,
+                    isHost:
+                        currentUserIsHost &&
+                        currentUserId != null &&
+                        position.rider.id == currentUserId,
                     myPoint: myPoint,
                     onTap: () => Navigator.of(context).pop(position),
                   ),
+                if (pendingCrewMembers.isNotEmpty) ...[
+                  const SizedBox(height: 14),
+                  Text(
+                    'Waiting to join (${pendingCrewMembers.length})',
+                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w800,
+                      color: colors.onSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      for (final member in pendingCrewMembers)
+                        Chip(
+                          avatar: const Icon(Icons.schedule, size: 16),
+                          label: Text(member),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                    ],
+                  ),
+                ],
               ],
             ),
     );
