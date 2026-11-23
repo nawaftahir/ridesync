@@ -6,8 +6,19 @@ from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse
 import pymysql
 
+from app.auth import (
+    create_auth_token,
+    extract_bearer_token,
+    get_current_user,
+    get_optional_user,
+    hash_password,
+    hash_token,
+    normalize_email,
+    verify_password,
+)
 from app.db import get_db, get_db_status
 from app.schemas import (
+    AuthResponse,
     CreateRideRequest,
     CreateRideResponse,
     EndRideRequest,
@@ -15,13 +26,20 @@ from app.schemas import (
     HealthResponse,
     JoinRideRequest,
     JoinRideResponse,
+    LoginRequest,
+    PastRideOut,
     PositionUpdatedResponse,
+    RegisterRequest,
     RideAlertOut,
+    RideHistoryResponse,
     RidePositionsResponse,
     RiderPositionOut,
+    RiderStatsOut,
     RiderSummary,
     SendAlertRequest,
+    UpdateMeRequest,
     UpdatePositionRequest,
+    UserOut,
 )
 
 # Excludes confusing characters (0/O, 1/I) so join codes are easy to read aloud.
@@ -85,6 +103,123 @@ def read_root() -> dict[str, str]:
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     return HealthResponse(status="ok", database=get_db_status())
+
+
+@app.post(
+    "/auth/register",
+    response_model=AuthResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def register(payload: RegisterRequest, conn=Depends(get_db)) -> AuthResponse:
+    email = normalize_email(payload.email)
+    pw_hash = hash_password(payload.password)
+
+    with conn.cursor() as cur:
+        try:
+            cur.execute(
+                "INSERT INTO users (email, password_hash, name) VALUES (%s, %s, %s)",
+                (email, pw_hash, payload.name),
+            )
+            user_id = int(cur.lastrowid)
+        except pymysql.IntegrityError as exc:
+            if exc.args and exc.args[0] == 1062:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="An account with this email already exists.",
+                ) from exc
+            raise
+
+        token = create_auth_token(cur, user_id)
+        cur.execute(
+            "SELECT id, email, name, created_at FROM users WHERE id = %s",
+            (user_id,),
+        )
+        row = cur.fetchone()
+
+    return AuthResponse(
+        access_token=token,
+        user=UserOut(
+            id=int(row["id"]),
+            email=str(row["email"]),
+            name=str(row["name"]),
+            created_at=row["created_at"],
+        ),
+    )
+
+
+@app.post("/auth/login", response_model=AuthResponse)
+def login(payload: LoginRequest, conn=Depends(get_db)) -> AuthResponse:
+    email = normalize_email(payload.email)
+
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT id, email, password_hash, name, created_at "
+            "FROM users WHERE email = %s",
+            (email,),
+        )
+        row = cur.fetchone()
+        if row is None or not verify_password(
+            payload.password, str(row["password_hash"] or "")
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid email or password.",
+            )
+
+        user_id = int(row["id"])
+        token = create_auth_token(cur, user_id)
+
+    return AuthResponse(
+        access_token=token,
+        user=UserOut(
+            id=user_id,
+            email=str(row["email"]),
+            name=str(row["name"]),
+            created_at=row["created_at"],
+        ),
+    )
+
+
+@app.get("/auth/me", response_model=UserOut)
+def read_me(current_user: dict = Depends(get_current_user)) -> UserOut:
+    return UserOut(**current_user)
+
+
+@app.patch("/auth/me", response_model=UserOut)
+def update_me(
+    payload: UpdateMeRequest,
+    current_user: dict = Depends(get_current_user),
+    conn=Depends(get_db),
+) -> UserOut:
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE users SET name = %s WHERE id = %s",
+            (payload.name, current_user["id"]),
+        )
+        cur.execute(
+            "SELECT id, email, name, created_at FROM users WHERE id = %s",
+            (current_user["id"],),
+        )
+        row = cur.fetchone()
+
+    return UserOut(
+        id=int(row["id"]),
+        email=str(row["email"] or ""),
+        name=str(row["name"]),
+        created_at=row["created_at"],
+    )
+
+
+@app.post("/auth/logout")
+def logout(request: Request, conn=Depends(get_db)) -> dict[str, bool]:
+    raw_token = extract_bearer_token(request)
+    if raw_token is not None:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM auth_tokens WHERE token_hash = %s",
+                (hash_token(raw_token),),
+            )
+    return {"ok": True}
 
 
 @app.get("/.well-known/assetlinks.json")
@@ -169,12 +304,18 @@ def join_link_page(code: str) -> HTMLResponse:
     status_code=status.HTTP_201_CREATED,
 )
 def create_ride(
-    payload: CreateRideRequest, conn=Depends(get_db)
+    payload: CreateRideRequest,
+    current_user: dict | None = Depends(get_optional_user),
+    conn=Depends(get_db),
 ) -> CreateRideResponse:
     with conn.cursor() as cur:
-        host_id, host_name = _get_or_create_user(
-            cur, payload.host_id, payload.host_name
-        )
+        if current_user is not None:
+            host_id = int(current_user["id"])
+            host_name = str(current_user["name"])
+        else:
+            host_id, host_name = _get_or_create_user(
+                cur, payload.host_id, payload.host_name
+            )
 
         code = ""
         ride_id = 0
@@ -222,9 +363,69 @@ def create_ride(
     )
 
 
+@app.get("/rides/history", response_model=RideHistoryResponse)
+def get_ride_history(
+    current_user: dict = Depends(get_current_user),
+    conn=Depends(get_db),
+) -> RideHistoryResponse:
+    user_id = int(current_user["id"])
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT r.code, r.destination, r.dest_lat, r.dest_lng, r.host_id, "
+            "u.name AS host_name, r.started_at, r.ended_at, "
+            "GREATEST(0, TIMESTAMPDIFF(MINUTE, r.started_at, r.ended_at)) AS duration_minutes, "
+            "(SELECT COUNT(*) FROM ride_members rm2 WHERE rm2.ride_id = r.id) AS rider_count "
+            "FROM rides r "
+            "INNER JOIN ride_members rm ON rm.ride_id = r.id "
+            "INNER JOIN users u ON u.id = r.host_id "
+            "WHERE rm.user_id = %s AND r.ended_at IS NOT NULL "
+            "ORDER BY r.ended_at DESC, r.id DESC LIMIT 50",
+            (user_id,),
+        )
+        rows = cur.fetchall()
+
+    rides: list[PastRideOut] = []
+    hosted_rides = 0
+    total_minutes = 0
+    for row in rows:
+        is_host = int(row["host_id"]) == user_id
+        if is_host:
+            hosted_rides += 1
+        duration_mins = int(row["duration_minutes"] or 0)
+        total_minutes += duration_mins
+        rides.append(
+            PastRideOut(
+                code=str(row["code"]),
+                destination=str(row["destination"]),
+                dest_lat=None if row["dest_lat"] is None else float(row["dest_lat"]),
+                dest_lng=None if row["dest_lng"] is None else float(row["dest_lng"]),
+                host_name=str(row["host_name"]),
+                is_host=is_host,
+                rider_count=int(row["rider_count"] or 1),
+                started_at=row["started_at"],
+                ended_at=row["ended_at"],
+                duration_minutes=duration_mins,
+            )
+        )
+
+    total_rides = len(rides)
+    return RideHistoryResponse(
+        stats=RiderStatsOut(
+            total_rides=total_rides,
+            hosted_rides=hosted_rides,
+            joined_rides=total_rides - hosted_rides,
+            total_minutes=total_minutes,
+        ),
+        rides=rides,
+    )
+
+
 @app.post("/rides/{code}/join", response_model=JoinRideResponse)
 def join_ride(
-    code: str, payload: JoinRideRequest, conn=Depends(get_db)
+    code: str,
+    payload: JoinRideRequest,
+    current_user: dict | None = Depends(get_optional_user),
+    conn=Depends(get_db),
 ) -> JoinRideResponse:
     with conn.cursor() as cur:
         ride = _find_ride(cur, code)
@@ -233,7 +434,11 @@ def join_ride(
                 status_code=409, detail=f"Ride '{ride['code']}' has already ended"
             )
 
-        user_id, name = _get_or_create_user(cur, payload.user_id, payload.name)
+        if current_user is not None:
+            user_id = int(current_user["id"])
+            name = str(current_user["name"])
+        else:
+            user_id, name = _get_or_create_user(cur, payload.user_id, payload.name)
         cur.execute(
             "INSERT IGNORE INTO ride_members (ride_id, user_id) VALUES (%s, %s)",
             (ride["id"], user_id),

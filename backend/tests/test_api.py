@@ -18,6 +18,7 @@ class FakeDbState:
         self.next_user_id = 1
         self.next_ride_id = 1
         self.users: dict[int, dict] = {}
+        self.tokens: dict[str, dict] = {}
         self.rides: dict[int, dict] = {}
         self.members: set[tuple[int, int]] = set()
         self.positions: dict[tuple[int, int], dict] = {}
@@ -47,11 +48,59 @@ class FakeCursor:
             user = self.state.users.get(params[0])
             if user:
                 self._rows = [{"id": user["id"], "name": user["name"]}]
-        elif q.startswith("INSERT INTO users"):
+        elif q.startswith("SELECT id, email, name, created_at FROM users WHERE id ="):
+            user = self.state.users.get(params[0])
+            if user:
+                self._rows = [dict(user)]
+        elif q.startswith("SELECT id, email, password_hash, name, created_at FROM users WHERE email ="):
+            for user in self.state.users.values():
+                if user.get("email") == params[0]:
+                    self._rows = [dict(user)]
+                    break
+        elif q.startswith("INSERT INTO users (email, password_hash, name) VALUES (NULL, '', %s)"):
             uid = self.state.next_user_id
             self.state.next_user_id += 1
-            self.state.users[uid] = {"id": uid, "name": params[0]}
+            self.state.users[uid] = {
+                "id": uid,
+                "email": None,
+                "password_hash": "",
+                "name": params[0],
+                "created_at": self.state.now,
+            }
             self.lastrowid = uid
+        elif q.startswith("INSERT INTO users (email, password_hash, name) VALUES (%s, %s, %s)"):
+            email, pw_hash, name = params
+            if any(u.get("email") == email for u in self.state.users.values()):
+                raise pymysql.IntegrityError(1062, "Duplicate email")
+            uid = self.state.next_user_id
+            self.state.next_user_id += 1
+            self.state.users[uid] = {
+                "id": uid,
+                "email": email,
+                "password_hash": pw_hash,
+                "name": name,
+                "created_at": self.state.now,
+            }
+            self.lastrowid = uid
+        elif q.startswith("UPDATE users SET name = %s WHERE id = %s"):
+            name, uid = params
+            if uid in self.state.users:
+                self.state.users[uid]["name"] = name
+        elif q.startswith("INSERT INTO auth_tokens"):
+            token_hash, user_id, days = params
+            self.state.tokens[token_hash] = {
+                "token_hash": token_hash,
+                "user_id": user_id,
+                "expires_at": self.state.now + timedelta(days=days),
+            }
+        elif q.startswith("SELECT u.id, u.email, u.name, u.created_at FROM auth_tokens"):
+            token_row = self.state.tokens.get(params[0])
+            if token_row and token_row["expires_at"] > self.state.now:
+                user = self.state.users.get(token_row["user_id"])
+                if user:
+                    self._rows = [dict(user)]
+        elif q.startswith("DELETE FROM auth_tokens WHERE token_hash ="):
+            self.state.tokens.pop(params[0], None)
         elif q.startswith("SELECT id, code, destination, dest_lat, dest_lng, host_id, started_at, ended_at FROM rides WHERE code ="):
             for ride in self.state.rides.values():
                 if ride["code"] == params[0]:
@@ -163,6 +212,37 @@ class FakeCursor:
         elif q.startswith("SELECT ended_at FROM rides WHERE id ="):
             ride = self.state.rides[params[0]]
             self._rows = [{"ended_at": ride["ended_at"]}]
+        elif q.startswith("SELECT r.code, r.destination, r.dest_lat"):
+            uid = params[0]
+            rows = []
+            for ride in self.state.rides.values():
+                if (ride["id"], uid) not in self.state.members:
+                    continue
+                if ride["ended_at"] is None:
+                    continue
+                rider_count = sum(
+                    1 for (r_id, _) in self.state.members if r_id == ride["id"]
+                )
+                duration_mins = max(
+                    0,
+                    int((ride["ended_at"] - ride["started_at"]).total_seconds() // 60),
+                )
+                rows.append(
+                    {
+                        "code": ride["code"],
+                        "destination": ride["destination"],
+                        "dest_lat": ride["dest_lat"],
+                        "dest_lng": ride["dest_lng"],
+                        "host_id": ride["host_id"],
+                        "host_name": self.state.users[ride["host_id"]]["name"],
+                        "started_at": ride["started_at"],
+                        "ended_at": ride["ended_at"],
+                        "duration_minutes": duration_mins,
+                        "rider_count": rider_count,
+                    }
+                )
+            rows.sort(key=lambda r: r["ended_at"], reverse=True)
+            self._rows = rows[:50]
         else:
             raise AssertionError(f"Unhandled test SQL: {q}")
 
@@ -190,9 +270,9 @@ def _use_fake_db(state: FakeDbState):
 
 def test_schema_sql_defines_core_tables() -> None:
     statements = read_table_sql()
-    assert len(statements) == 5
+    assert len(statements) == 6
     joined = "\n".join(statements)
-    for table in ("users", "rides", "ride_members", "positions", "ride_alerts"):
+    for table in ("users", "rides", "ride_members", "positions", "ride_alerts", "auth_tokens"):
         assert f"CREATE TABLE IF NOT EXISTS {table}" in joined
 
 
@@ -367,3 +447,178 @@ def test_init_db_entrypoint(monkeypatch, capsys) -> None:
     with pytest.raises(SystemExit) as exc_info:
         init_db.main()
     assert "mysql_native_password" in str(exc_info.value)
+
+
+def test_auth_register_login_me_rides_and_logout() -> None:
+    state = FakeDbState()
+    _use_fake_db(state)
+    try:
+        client = TestClient(app)
+
+        # Invalid email is rejected.
+        bad_email = client.post(
+            "/auth/register",
+            json={"email": "not-an-email", "password": "secret123", "name": "Nawaf"},
+        )
+        assert bad_email.status_code == 400
+
+        # Register creates account + bearer token.
+        reg = client.post(
+            "/auth/register",
+            json={"email": "Nawaf@Example.com", "password": "secret123", "name": "Nawaf"},
+        )
+        assert reg.status_code == 201
+        reg_body = reg.json()
+        token = reg_body["access_token"]
+        user_id = reg_body["user"]["id"]
+        assert reg_body["token_type"] == "bearer"
+        assert reg_body["user"]["email"] == "nawaf@example.com"
+        assert reg_body["user"]["name"] == "Nawaf"
+        assert state.users[user_id]["password_hash"].startswith("scrypt$")
+
+        # Duplicate email fails with 409.
+        dup = client.post(
+            "/auth/register",
+            json={"email": "nawaf@example.com", "password": "otherpassword", "name": "Other"},
+        )
+        assert dup.status_code == 409
+
+        # Wrong password returns 401.
+        bad_login = client.post(
+            "/auth/login",
+            json={"email": "nawaf@example.com", "password": "wrongpassword"},
+        )
+        assert bad_login.status_code == 401
+
+        # Valid login issues fresh bearer token.
+        logged_in = client.post(
+            "/auth/login",
+            json={"email": "nawaf@example.com", "password": "secret123"},
+        )
+        assert logged_in.status_code == 200
+        login_token = logged_in.json()["access_token"]
+        assert login_token != token
+        headers = {"Authorization": f"Bearer {login_token}"}
+
+        # /auth/me requires valid bearer token and supports display-name update.
+        assert client.get("/auth/me").status_code == 401
+        me = client.get("/auth/me", headers=headers)
+        assert me.status_code == 200
+        assert me.json()["id"] == user_id
+
+        updated = client.patch("/auth/me", headers=headers, json={"name": "Captain Nawaf"})
+        assert updated.status_code == 200
+        assert updated.json()["name"] == "Captain Nawaf"
+
+        # Hosting a ride with Bearer token reuses the signed-in user row (no guest row).
+        users_before_ride = len(state.users)
+        ride_resp = client.post(
+            "/rides",
+            headers=headers,
+            json={"destination": "Monal", "host_name": "IgnoredTemp"},
+        )
+        assert ride_resp.status_code == 201
+        assert ride_resp.json()["host_id"] == user_id
+        assert ride_resp.json()["host_name"] == "Captain Nawaf"
+        assert len(state.users) == users_before_ride
+
+        # Registering a second account and joining with Bearer token links that account.
+        reg2 = client.post(
+            "/auth/register",
+            json={"email": "bilal@example.com", "password": "secret123", "name": "Bilal"},
+        )
+        token2 = reg2.json()["access_token"]
+        uid2 = reg2.json()["user"]["id"]
+        joined = client.post(
+            f"/rides/{ride_resp.json()['code']}/join",
+            headers={"Authorization": f"Bearer {token2}"},
+            json={"name": "IgnoredTemp"},
+        )
+        assert joined.status_code == 200
+        assert joined.json()["user_id"] == uid2
+        assert joined.json()["name"] == "Bilal"
+
+        # Logout revokes the token immediately.
+        assert client.post("/auth/logout", headers=headers).status_code == 200
+        assert client.get("/auth/me", headers=headers).status_code == 401
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_ride_history_and_rider_stats() -> None:
+    state = FakeDbState()
+    _use_fake_db(state)
+    try:
+        client = TestClient(app)
+        assert client.get("/rides/history").status_code == 401
+
+        host = client.post(
+            "/auth/register",
+            json={"email": "host@example.com", "password": "secret123", "name": "Nawaf"},
+        ).json()
+        peer = client.post(
+            "/auth/register",
+            json={"email": "peer@example.com", "password": "secret123", "name": "Bilal"},
+        ).json()
+        host_headers = {"Authorization": f"Bearer {host['access_token']}"}
+        peer_headers = {"Authorization": f"Bearer {peer['access_token']}"}
+
+        # Ride 1: hosted by Nawaf, joined by Bilal, runs 35 min then ends.
+        r1 = client.post(
+            "/rides",
+            headers=host_headers,
+            json={
+                "destination": "Daman-e-Koh",
+                "dest_lat": 33.7394,
+                "dest_lng": 73.0558,
+            },
+        ).json()
+        client.post(f"/rides/{r1['code']}/join", headers=peer_headers, json={})
+        state.now += timedelta(minutes=35)
+        client.post(
+            f"/rides/{r1['code']}/end",
+            headers=host_headers,
+            json={"host_id": host["user"]["id"]},
+        )
+
+        # Ride 2: hosted by Bilal, joined by Nawaf, runs 50 min then ends.
+        r2 = client.post(
+            "/rides",
+            headers=peer_headers,
+            json={"destination": "Murree"},
+        ).json()
+        client.post(f"/rides/{r2['code']}/join", headers=host_headers, json={})
+        state.now += timedelta(minutes=50)
+        client.post(
+            f"/rides/{r2['code']}/end",
+            headers=peer_headers,
+            json={"host_id": peer["user"]["id"]},
+        )
+
+        # Ride 3: still active (not ended yet) -> excluded from past rides.
+        client.post(
+            "/rides",
+            headers=host_headers,
+            json={"destination": "Active Ride"},
+        )
+
+        resp = client.get("/rides/history", headers=host_headers)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["stats"] == {
+            "total_rides": 2,
+            "hosted_rides": 1,
+            "joined_rides": 1,
+            "total_minutes": 85,
+        }
+        assert len(body["rides"]) == 2
+        assert body["rides"][0]["destination"] == "Murree"
+        assert body["rides"][0]["is_host"] is False
+        assert body["rides"][0]["duration_minutes"] == 50
+        assert body["rides"][0]["rider_count"] == 2
+        assert body["rides"][1]["destination"] == "Daman-e-Koh"
+        assert body["rides"][1]["is_host"] is True
+        assert body["rides"][1]["duration_minutes"] == 35
+        assert body["rides"][1]["dest_lat"] == 33.7394
+    finally:
+        app.dependency_overrides.clear()

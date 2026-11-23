@@ -60,3 +60,11 @@ CREATE TABLE IF NOT EXISTS ride_alerts (
   CONSTRAINT fk_alerts_ride FOREIGN KEY (ride_id) REFERENCES rides (id) ON DELETE CASCADE,
   CONSTRAINT fk_alerts_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS auth_tokens (
+  token_hash CHAR(64) PRIMARY KEY,
+  user_id INT NOT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  expires_at DATETIME NOT NULL,
+  CONSTRAINT fk_tokens_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+);

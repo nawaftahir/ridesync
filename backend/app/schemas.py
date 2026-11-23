@@ -13,6 +13,34 @@ class HealthResponse(_TrimmedModel):
     database: str
 
 
+class RegisterRequest(_TrimmedModel):
+    email: str = Field(min_length=3, max_length=255)
+    password: str = Field(min_length=6, max_length=128)
+    name: str = Field(min_length=1, max_length=100)
+
+
+class LoginRequest(_TrimmedModel):
+    email: str = Field(min_length=3, max_length=255)
+    password: str = Field(min_length=1, max_length=128)
+
+
+class UpdateMeRequest(_TrimmedModel):
+    name: str = Field(min_length=1, max_length=100)
+
+
+class UserOut(_TrimmedModel):
+    id: int
+    email: str
+    name: str
+    created_at: datetime
+
+
+class AuthResponse(_TrimmedModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: UserOut
+
+
 class CreateRideRequest(_TrimmedModel):
     destination: str = Field(min_length=1, max_length=255)
     dest_lat: float | None = Field(default=None, ge=-90.0, le=90.0)
@@ -112,3 +140,28 @@ class EndRideRequest(_TrimmedModel):
 class EndRideResponse(_TrimmedModel):
     code: str
     ended_at: datetime
+
+
+class RiderStatsOut(_TrimmedModel):
+    total_rides: int = 0
+    hosted_rides: int = 0
+    joined_rides: int = 0
+    total_minutes: int = 0
+
+
+class PastRideOut(_TrimmedModel):
+    code: str
+    destination: str
+    dest_lat: float | None = None
+    dest_lng: float | None = None
+    host_name: str
+    is_host: bool
+    rider_count: int
+    started_at: datetime
+    ended_at: datetime | None = None
+    duration_minutes: int = 0
+
+
+class RideHistoryResponse(_TrimmedModel):
+    stats: RiderStatsOut
+    rides: list[PastRideOut]
