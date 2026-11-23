@@ -71,13 +71,22 @@ IconData iconForPlaceCategory(String? category) {
   };
 }
 
-// Result returned by PlaceSearchSheet: either a picked place or "pick on map".
+// Result returned by PlaceSearchSheet: a picked place, "pick on map", or custom text.
 class PlaceSearchAction {
-  const PlaceSearchAction.place(this.place) : pickOnMap = false;
-  const PlaceSearchAction.pickOnMap() : place = null, pickOnMap = true;
+  const PlaceSearchAction.place(this.place)
+    : pickOnMap = false,
+      customDestination = null;
+  const PlaceSearchAction.pickOnMap()
+    : place = null,
+      pickOnMap = true,
+      customDestination = null;
+  const PlaceSearchAction.custom(this.customDestination)
+    : place = null,
+      pickOnMap = false;
 
   final PlaceResult? place;
   final bool pickOnMap;
+  final String? customDestination;
 }
 
 // Google Maps-style search modal with category chips, recent searches,
@@ -90,6 +99,8 @@ class PlaceSearchSheet extends StatefulWidget {
     this.initialQuery = '',
     this.initialCategory,
     this.preferences,
+    this.showPickOnMap = true,
+    this.allowCustomEntry = false,
   });
 
   final MapSearchService searchService;
@@ -97,6 +108,8 @@ class PlaceSearchSheet extends StatefulWidget {
   final String initialQuery;
   final SearchCategory? initialCategory;
   final AppPreferences? preferences;
+  final bool showPickOnMap;
+  final bool allowCustomEntry;
 
   @override
   State<PlaceSearchSheet> createState() => _PlaceSearchSheetState();
@@ -381,29 +394,57 @@ class _PlaceSearchSheetState extends State<PlaceSearchSheet> {
               else
                 const Divider(height: 1),
 
-              ListTile(
-                dense: true,
-                leading: CircleAvatar(
-                  radius: 17,
-                  backgroundColor: colors.secondaryContainer,
-                  child: Icon(
-                    Icons.push_pin_outlined,
-                    size: 18,
-                    color: colors.onSecondaryContainer,
+              if (widget.showPickOnMap) ...[
+                ListTile(
+                  dense: true,
+                  leading: CircleAvatar(
+                    radius: 17,
+                    backgroundColor: colors.secondaryContainer,
+                    child: Icon(
+                      Icons.push_pin_outlined,
+                      size: 18,
+                      color: colors.onSecondaryContainer,
+                    ),
                   ),
+                  title: const Text(
+                    'Choose on map',
+                    style: TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                  subtitle: const Text('Tap anywhere on the map to drop a pin'),
+                  onTap: () =>
+                      Navigator.of(context)
+                          .pop(const PlaceSearchAction.pickOnMap()),
                 ),
-                title: const Text(
-                  'Choose on map',
-                  style: TextStyle(fontWeight: FontWeight.w700),
-                ),
-                subtitle: const Text('Tap anywhere on the map to drop a pin'),
-                onTap: () =>
-                    Navigator.of(context)
-                        .pop(const PlaceSearchAction.pickOnMap()),
-              ),
-              const Divider(height: 1),
+                const Divider(height: 1),
+              ],
 
-              // Body: offline error, recent searches, live results, or hint.
+              if (widget.allowCustomEntry &&
+                  _controller.text.trim().length >= 2) ...[
+                ListTile(
+                  dense: true,
+                  leading: CircleAvatar(
+                    radius: 17,
+                    backgroundColor: colors.primaryContainer,
+                    child: Icon(
+                      Icons.edit_location_alt_outlined,
+                      size: 18,
+                      color: colors.onPrimaryContainer,
+                    ),
+                  ),
+                  title: Text(
+                    'Use "${_controller.text.trim()}"',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                  subtitle: const Text('Use typed destination name'),
+                  onTap: () => Navigator.of(context)
+                      .pop(PlaceSearchAction.custom(_controller.text.trim())),
+                ),
+                const Divider(height: 1),
+              ],
+
+              // Body: offline error, quick stops + recents, live results, or empty state.
               if (_errorMessage != null)
                 Padding(
                   padding: const EdgeInsets.all(24),
@@ -433,42 +474,78 @@ class _PlaceSearchSheetState extends State<PlaceSearchSheet> {
                     ],
                   ),
                 )
-              else if (showRecents)
+              else if (_controller.text.trim().length < 2 && !_hasSearched)
                 Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                  child: ListView(
+                    padding: const EdgeInsets.only(bottom: 16),
                     children: [
                       Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 10, 8, 4),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text(
-                              'Recent',
-                              style: TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w800,
-                                color: colors.onSurfaceVariant,
-                              ),
-                            ),
-                            TextButton(
-                              onPressed: _clearRecents,
-                              child: const Text('Clear'),
-                            ),
-                          ],
-                        ),
-                      ),
-                      Expanded(
-                        child: ListView.separated(
-                          itemCount: _recentPlaces.length,
-                          separatorBuilder: (_, _) => const Divider(height: 1),
-                          itemBuilder: (context, index) => _buildPlaceTile(
-                            context,
-                            _recentPlaces[index],
-                            isRecent: true,
+                        padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                        child: Text(
+                          'Quick stops',
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w800,
+                            color: colors.onSurfaceVariant,
                           ),
                         ),
                       ),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: Wrap(
+                          spacing: 10,
+                          runSpacing: 10,
+                          children: [
+                            for (final category in kRiderSearchCategories)
+                              ActionChip(
+                                avatar: Icon(
+                                  category.icon,
+                                  size: 18,
+                                  color: colors.primary,
+                                ),
+                                label: Text(
+                                  category.label,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                                onPressed: () => _onCategoryTapped(category),
+                              ),
+                          ],
+                        ),
+                      ),
+                      if (showRecents) ...[
+                        const SizedBox(height: 12),
+                        const Divider(height: 1),
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 10, 8, 4),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(
+                                'Recent',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w800,
+                                  color: colors.onSurfaceVariant,
+                                ),
+                              ),
+                              TextButton(
+                                onPressed: _clearRecents,
+                                child: const Text('Clear'),
+                              ),
+                            ],
+                          ),
+                        ),
+                        for (int i = 0; i < _recentPlaces.length; i++) ...[
+                          if (i > 0) const Divider(height: 1),
+                          _buildPlaceTile(
+                            context,
+                            _recentPlaces[i],
+                            isRecent: true,
+                          ),
+                        ],
+                      ],
                     ],
                   ),
                 )
@@ -488,9 +565,7 @@ class _PlaceSearchSheetState extends State<PlaceSearchSheet> {
                 Padding(
                   padding: const EdgeInsets.all(24),
                   child: Text(
-                    _hasSearched
-                        ? 'No places found. Try a broader name or choose on the map.'
-                        : 'Search a place, pick a category above, or drop a pin on the map.',
+                    'No places found. Try a broader name${widget.showPickOnMap ? ' or choose on the map.' : '.'}',
                     textAlign: TextAlign.center,
                     style: TextStyle(color: colors.onSurfaceVariant),
                   ),

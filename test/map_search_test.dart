@@ -411,9 +411,13 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      // Tap floating "Fuel" pill directly on the Map screen.
-      expect(find.text('Fuel'), findsOneWidget);
-      await tester.tap(find.text('Fuel'));
+      // Tap the Map search bar -> Quick stops shows "Fuel" inside the search modal.
+      expect(find.text('Fuel'), findsNothing);
+      await tester.tap(find.text('Where are you riding?'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Quick stops'), findsOneWidget);
+      await tester.tap(find.text('Fuel').first);
       await tester.pumpAndSettle();
 
       expect(find.text('PSO Fuel Station'), findsOneWidget);

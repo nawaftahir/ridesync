@@ -389,7 +389,12 @@ void main() {
     await tester.tap(find.text('Host a ride'));
     await tester.pumpAndSettle();
 
+    await tester.tap(find.text('Where are you riding?'));
+    await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField).last, 'Khanpur Dam');
+    await tester.pump();
+    await tester.tap(find.text('Use "Khanpur Dam"'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Generate Join Code'));
     await tester.pumpAndSettle();
     await tester.ensureVisible(find.text('Start Ride'));

@@ -6,6 +6,7 @@ import 'package:ridesync/models/active_ride.dart';
 import 'package:ridesync/services/map_search_service.dart';
 import 'package:ridesync/services/ride_api_service.dart';
 import 'package:ridesync/utils/ride_share.dart';
+import 'package:ridesync/widgets/place_search_sheet.dart';
 
 class HostRideScreen extends StatefulWidget {
   const HostRideScreen({
@@ -44,10 +45,6 @@ class _HostRideScreenState extends State<HostRideScreen> {
   }
 
   late PlaceResult? _selectedPlace = widget.initialPlace;
-  Timer? _searchDebounce;
-  int _searchRequestId = 0;
-  bool _isSearching = false;
-  List<PlaceResult> _suggestions = const [];
 
   // The generated code. null = not generated yet -> code card is hidden.
   String? _joinCode;
@@ -66,47 +63,40 @@ class _HostRideScreenState extends State<HostRideScreen> {
         _selectedPlace = null;
       });
     }
-
-    final search = widget.searchService;
-    if (search == null) return;
-
-    _searchDebounce?.cancel();
-    final trimmed = value.trim();
-    if (trimmed.length < 2) {
-      _searchRequestId++;
-      setState(() {
-        _isSearching = false;
-        _suggestions = const [];
-      });
-      return;
-    }
-
-    setState(() {
-      _isSearching = true;
-    });
-    _searchDebounce = Timer(const Duration(milliseconds: 350), () async {
-      final reqId = ++_searchRequestId;
-      final results = await search.searchPlaces(
-        trimmed,
-        near: widget.nearPoint,
-      );
-      if (!mounted || reqId != _searchRequestId) return;
-      setState(() {
-        _suggestions = results;
-        _isSearching = false;
-      });
-    });
   }
 
   void _pickSuggestion(PlaceResult place) {
-    _searchDebounce?.cancel();
-    _searchRequestId++;
     _destinationController.text = place.displayName;
     setState(() {
       _selectedPlace = place;
-      _suggestions = const [];
-      _isSearching = false;
     });
+  }
+
+  Future<void> _openPlaceSearchSheet() async {
+    final search = widget.searchService;
+    if (search == null) return;
+    final action = await showModalBottomSheet<PlaceSearchAction>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (_) => PlaceSearchSheet(
+        searchService: search,
+        nearPoint: widget.nearPoint,
+        initialQuery: _destinationController.text.trim(),
+        showPickOnMap: false,
+        allowCustomEntry: true,
+      ),
+    );
+    if (!mounted || action == null) return;
+    if (action.place != null) {
+      _pickSuggestion(action.place!);
+    } else if (action.customDestination != null &&
+        action.customDestination!.trim().isNotEmpty) {
+      _destinationController.text = action.customDestination!.trim();
+      setState(() {
+        _selectedPlace = null;
+      });
+    }
   }
 
   Future<void> _onGenerateTapped() async {
@@ -136,7 +126,6 @@ class _HostRideScreenState extends State<HostRideScreen> {
     setState(() {
       _isLoading = true;
       _errorMessage = null;
-      _suggestions = const [];
     });
     try {
       final ride = await api.createRide(
@@ -208,7 +197,6 @@ class _HostRideScreenState extends State<HostRideScreen> {
 
   @override
   void dispose() {
-    _searchDebounce?.cancel();
     _copiedResetTimer?.cancel();
     _nameController.dispose();
     _destinationController.dispose();
@@ -245,34 +233,95 @@ class _HostRideScreenState extends State<HostRideScreen> {
             Text('Where are you going?', style: text.titleMedium),
             const SizedBox(height: 12),
 
-            TextField(
-              controller: _destinationController,
-              textCapitalization: TextCapitalization.words,
-              onChanged: _onDestinationChanged,
-              decoration: InputDecoration(
-                hintText: 'Search a place, road, or landmark',
-                prefixIcon: const Icon(Icons.location_on_outlined),
-                suffixIcon: _isSearching
-                    ? const Padding(
-                        padding: EdgeInsets.all(12),
-                        child: SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        ),
-                      )
-                    : (_destinationController.text.isEmpty
-                          ? null
-                          : IconButton(
-                              icon: const Icon(Icons.close),
+            if (widget.searchService != null)
+              Material(
+                color: colors.surfaceContainerLow,
+                elevation: 2,
+                shadowColor: Colors.black.withValues(alpha: 0.14),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                  side: BorderSide(color: colors.outlineVariant),
+                ),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(16),
+                  onTap: _openPlaceSearchSheet,
+                  child: SizedBox(
+                    height: 52,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 14),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.search,
+                            size: 20,
+                            color: _destinationController.text.trim().isEmpty
+                                ? colors.onSurfaceVariant
+                                : colors.primary,
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Text(
+                              _destinationController.text.trim().isEmpty
+                                  ? 'Where are you riding?'
+                                  : _destinationController.text.trim(),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: text.bodyLarge?.copyWith(
+                                fontWeight: FontWeight.w700,
+                                color:
+                                    _destinationController.text.trim().isEmpty
+                                    ? colors.onSurfaceVariant
+                                    : colors.onSurface,
+                              ),
+                            ),
+                          ),
+                          if (_destinationController.text.isNotEmpty)
+                            IconButton(
+                              icon: const Icon(Icons.close, size: 18),
+                              tooltip: 'Clear destination',
+                              visualDensity: VisualDensity.compact,
                               onPressed: () {
-                                _destinationController.clear();
-                                _onDestinationChanged('');
+                                setState(() {
+                                  _destinationController.clear();
+                                  _selectedPlace = null;
+                                });
                               },
-                            )),
-                border: const OutlineInputBorder(),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              )
+            else
+              TextField(
+                controller: _destinationController,
+                textCapitalization: TextCapitalization.words,
+                onChanged: _onDestinationChanged,
+                decoration: InputDecoration(
+                  hintText: 'Where are you riding?',
+                  filled: true,
+                  fillColor: colors.surfaceContainerHighest,
+                  prefixIcon: const Icon(Icons.search),
+                  suffixIcon: _destinationController.text.isEmpty
+                      ? null
+                      : IconButton(
+                          icon: const Icon(Icons.close),
+                          tooltip: 'Clear destination',
+                          onPressed: () {
+                            setState(() {
+                              _destinationController.clear();
+                              _selectedPlace = null;
+                            });
+                          },
+                        ),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(28),
+                    borderSide: BorderSide.none,
+                  ),
+                  contentPadding: const EdgeInsets.symmetric(vertical: 14),
+                ),
               ),
-            ),
 
             if (_selectedPlace != null) ...[
               const SizedBox(height: 8),
@@ -291,53 +340,6 @@ class _HostRideScreenState extends State<HostRideScreen> {
                     ),
                   ),
                 ],
-              ),
-            ],
-
-            if (_suggestions.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              Card(
-                margin: EdgeInsets.zero,
-                child: Column(
-                  children: [
-                    for (int i = 0; i < _suggestions.length; i++) ...[
-                      if (i > 0) const Divider(height: 1),
-                      ListTile(
-                        dense: true,
-                        leading: Icon(
-                          Icons.location_on_outlined,
-                          color: colors.primary,
-                        ),
-                        title: Text(
-                          _suggestions[i].name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontWeight: FontWeight.w700),
-                        ),
-                        subtitle: _suggestions[i].subtitle.isEmpty
-                            ? null
-                            : Text(
-                                _suggestions[i].subtitle,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                        trailing: widget.nearPoint == null
-                            ? null
-                            : Text(
-                                formatPlaceDistance(
-                                  widget.nearPoint!,
-                                  _suggestions[i].point,
-                                ),
-                                style: text.bodySmall?.copyWith(
-                                  color: colors.onSurfaceVariant,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                        onTap: () => _pickSuggestion(_suggestions[i]),
-                      ),
-                    ],
-                  ],
-                ),
               ),
             ],
 
