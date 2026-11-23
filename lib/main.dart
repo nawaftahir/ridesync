@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:ridesync/screens/main_screen.dart';
+import 'package:ridesync/screens/home_screen.dart';
 import 'package:ridesync/theme/app_theme.dart';
 
 void main() {
@@ -33,7 +33,7 @@ class _RideSyncAppState extends State<RideSyncApp> {
       theme: AppTheme.light,
       darkTheme: AppTheme.dark,
       themeMode: _themeMode,
-      home: MainScreen(
+      home: HomeScreen(
         themeMode: _themeMode,
         onThemeModeChanged: _setThemeMode,
       ),

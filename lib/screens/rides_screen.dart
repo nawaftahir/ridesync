@@ -55,6 +55,14 @@ class RidesScreen extends StatelessWidget {
             const SizedBox(height: 16),
           ],
 
+          if (activeRide == null) ...[
+            Text(
+              'Start a group ride or join your crew with a code.',
+              style: text.bodyMedium?.copyWith(color: colors.onSurfaceVariant),
+            ),
+            const SizedBox(height: 16),
+          ],
+
           FilledButton.icon(
             onPressed: onHostRide,
             icon: const Icon(Icons.add_road),

@@ -13,11 +13,22 @@ void main() {
     FakeMapLibrePlatform.register();
   });
 
-  testWidgets('RideSyncApp starts on clean live map with 4 tabs', (
+  testWidgets('RideSyncApp starts on Home screen for guests and opens 4 tabs', (
     tester,
   ) async {
     await tester.pumpWidget(const RideSyncApp());
-    await tester.pump();
+    await tester.pumpAndSettle();
+
+    // First screen for guest users is the RideSync Home screen.
+    expect(find.text('RideSync'), findsOneWidget);
+    expect(find.text('Host a ride'), findsOneWidget);
+    expect(find.text('Join with a code'), findsOneWidget);
+    expect(find.text('Explore live map'), findsOneWidget);
+    expect(find.text('Sign up or log in'), findsOneWidget);
+
+    // Enter MainScreen on the live Map tab.
+    await tester.tap(find.text('Explore live map'));
+    await tester.pumpAndSettle();
 
     // Bottom navigation shows the 4 main tabs.
     expect(find.text('Map'), findsOneWidget);
@@ -25,7 +36,6 @@ void main() {
     expect(find.text('Group'), findsOneWidget);
     expect(find.text('Profile'), findsOneWidget);
 
-    // Starts on a clean idle map with zero mock rides.
     expect(find.text('Where are you riding?'), findsOneWidget);
     expect(find.text('Ready to ride'), findsOneWidget);
     expect(find.text('Idle'), findsOneWidget);
@@ -36,7 +46,6 @@ void main() {
     // Switch to Rides tab and check actions & empty history state.
     await tester.tap(find.text('Rides'));
     await tester.pump();
-    expect(find.text('Host a ride'), findsOneWidget);
     expect(find.text('Join with a code'), findsOneWidget);
     expect(find.text('Past rides'), findsOneWidget);
     expect(find.text('No past rides yet'), findsOneWidget);
@@ -51,7 +60,7 @@ void main() {
     await tester.pump();
     expect(find.text('Rider'), findsOneWidget);
     expect(find.text('Sign up or log in'), findsOneWidget);
-    await tester.drag(find.byType(ListView), const Offset(0, -300));
+    await tester.drag(find.byType(ListView).last, const Offset(0, -300));
     await tester.pumpAndSettle();
     expect(find.text('Backend server'), findsOneWidget);
   });
@@ -83,14 +92,16 @@ void main() {
     expect(find.text('DESTINATION'), findsOneWidget);
     expect(find.text('End Ride'), findsOneWidget);
 
-    // Tapping the sheet header collapses and re-expands the bottom sheet.
+    // Tapping the sheet header smoothly collapses and re-expands the bottom sheet.
+    final expandedY = tester.getTopLeft(find.text('Group ride')).dy;
     await tester.tap(find.text('Group ride'));
-    await tester.pump();
-    expect(find.text('PICKUP'), findsNothing);
+    await tester.pumpAndSettle();
+    final collapsedY = tester.getTopLeft(find.text('Group ride')).dy;
+    expect(collapsedY, greaterThan(expandedY));
 
     await tester.tap(find.text('Group ride'));
-    await tester.pump();
-    expect(find.text('PICKUP'), findsOneWidget);
+    await tester.pumpAndSettle();
+    expect(tester.getTopLeft(find.text('Group ride')).dy, lessThan(collapsedY));
 
     // Ending the ride returns to the clean idle map.
     await tester.tap(find.text('End Ride'));
@@ -110,7 +121,10 @@ void main() {
     });
 
     await tester.pumpWidget(const RideSyncApp());
-    await tester.pump();
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Explore live map'));
+    await tester.pumpAndSettle();
 
     await tester.tap(find.text('Profile'));
     await tester.pumpAndSettle();
