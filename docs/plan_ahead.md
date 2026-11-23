@@ -22,12 +22,12 @@ Roadmap of upcoming features, polish, and release prep after core live map, plac
 ---
 
 ## 3. Real Accounts & Authentication
-- [ ] Wire `lib/screens/login_screen.dart` to FastAPI (`/auth/register`, `/auth/login`, `/auth/me`) with hashed passwords and bearer token auth using the existing `users` table in `backend/sql/schema.sql`, replacing guest user rows.
+- [x] Wire `lib/screens/login_screen.dart` to FastAPI (`/auth/register`, `/auth/login`, `/auth/me`, `/auth/logout`) with scrypt password hashing and MariaDB bearer tokens (`auth_tokens`), keeping quick guest riding supported when signed out.
 
 ---
 
 ## 4. Real Ride History & Rider Stats
-- [ ] Add `GET /rides/history` on FastAPI so `RidesScreen` (`Past rides`) and `ProfileScreen` display real completed rides and stats from MariaDB.
+- [x] Add `GET /rides/history` on FastAPI so `RidesScreen` (`Past rides`) and `ProfileScreen` display real completed rides and stats from MariaDB.
 
 ---
 

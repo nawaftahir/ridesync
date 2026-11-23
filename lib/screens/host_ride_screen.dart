@@ -14,6 +14,8 @@ class HostRideScreen extends StatefulWidget {
     this.apiService,
     this.searchService,
     this.hostName = 'Rider',
+    this.isSignedIn = false,
+    this.initialDestination,
     this.initialPlace,
     this.initialRoute,
     this.nearPoint,
@@ -23,6 +25,8 @@ class HostRideScreen extends StatefulWidget {
   final RideApiService? apiService;
   final MapSearchService? searchService;
   final String hostName;
+  final bool isSignedIn;
+  final String? initialDestination;
   final PlaceResult? initialPlace;
   final RoutePreview? initialRoute;
   final LatLng? nearPoint;
@@ -37,7 +41,10 @@ class _HostRideScreenState extends State<HostRideScreen> {
     text: widget.hostName == 'Rider' ? '' : widget.hostName,
   );
   late final TextEditingController _destinationController =
-      TextEditingController(text: widget.initialPlace?.displayName ?? '');
+      TextEditingController(
+        text:
+            widget.initialPlace?.displayName ?? widget.initialDestination ?? '',
+      );
 
   String get _effectiveHostName {
     final typed = _nameController.text.trim();
@@ -215,20 +222,53 @@ class _HostRideScreenState extends State<HostRideScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text('Your name', style: text.titleMedium),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _nameController,
-              textCapitalization: TextCapitalization.words,
-              maxLength: 30,
-              decoration: const InputDecoration(
-                hintText: 'Enter a temp name (optional, defaults to Rider)',
-                prefixIcon: Icon(Icons.person_outline),
-                counterText: '',
-                border: OutlineInputBorder(),
+            if (widget.isSignedIn) ...[
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 12,
+                ),
+                decoration: BoxDecoration(
+                  color: colors.primaryContainer.withValues(alpha: 0.6),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.verified_user_outlined,
+                      size: 18,
+                      color: colors.onPrimaryContainer,
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        'Hosting as ${widget.hostName}',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w700,
+                          color: colors.onPrimaryContainer,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            ),
-            const SizedBox(height: 20),
+              const SizedBox(height: 20),
+            ] else ...[
+              Text('Your name', style: text.titleMedium),
+              const SizedBox(height: 8),
+              TextField(
+                controller: _nameController,
+                textCapitalization: TextCapitalization.words,
+                maxLength: 30,
+                decoration: const InputDecoration(
+                  hintText: 'Enter a temp name (optional, defaults to Rider)',
+                  prefixIcon: Icon(Icons.person_outline),
+                  counterText: '',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 20),
+            ],
 
             Text('Where are you going?', style: text.titleMedium),
             const SizedBox(height: 12),

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:ridesync/models/active_ride.dart';
+import 'package:ridesync/models/auth_session.dart';
 import 'package:ridesync/screens/host_ride_screen.dart';
 import 'package:ridesync/screens/join_ride_screen.dart';
 import 'package:ridesync/screens/login_screen.dart';
@@ -38,6 +39,7 @@ class _HomeScreenState extends State<HomeScreen> {
   ActiveRide? _resumableRide;
   StreamSubscription<Uri>? _deepLinkSub;
   bool _isHandlingDeepLink = false;
+  bool _didAutoEnterSignedIn = false;
 
   @override
   void initState() {
@@ -60,6 +62,7 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       final savedUrl = await _prefs.loadServerUrl();
       final savedName = await _prefs.loadRiderName();
+      final savedSession = await _prefs.loadAuthSession();
       final savedRide = await _prefs.loadActiveRide();
       if (!mounted) return;
 
@@ -72,6 +75,29 @@ class _HomeScreenState extends State<HomeScreen> {
         _apiService?.dispose();
         _serverUrl = savedUrl.trim();
         _apiService = RideApiService(baseUrl: _serverUrl);
+      }
+
+      if (savedSession != null) {
+        _apiService?.authToken = savedSession.accessToken;
+        _riderName = savedSession.user.name;
+        if (!_didAutoEnterSignedIn) {
+          _didAutoEnterSignedIn = true;
+          ActiveRide? liveRide;
+          if (savedRide != null && await _verifyRideIsStillLive(savedRide)) {
+            liveRide = savedRide;
+          } else if (savedRide != null) {
+            await _prefs.clearActiveRide();
+          }
+          if (!mounted) return;
+          await _enterMainApp(
+            initialRide: liveRide,
+            initialSession: savedSession,
+            initialTabIndex: liveRide != null ? 0 : 1,
+          );
+          return;
+        }
+      } else {
+        _apiService?.authToken = null;
       }
 
       if (savedRide != null) {
@@ -144,6 +170,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _enterMainApp({
     ActiveRide? initialRide,
+    AuthSession? initialSession,
     required int initialTabIndex,
   }) async {
     if (initialRide != null) {
@@ -154,6 +181,7 @@ class _HomeScreenState extends State<HomeScreen> {
       MaterialPageRoute(
         builder: (_) => MainScreen(
           initialActiveRide: initialRide,
+          initialAuthSession: initialSession,
           initialTabIndex: initialTabIndex,
           themeMode: widget.themeMode,
           onThemeModeChanged: widget.onThemeModeChanged,
@@ -163,6 +191,17 @@ class _HomeScreenState extends State<HomeScreen> {
     if (mounted) {
       _loadPrefsAndVerifySavedRide();
     }
+  }
+
+  Future<void> _openLogin() async {
+    final session = await Navigator.of(context).push<AuthSession>(
+      MaterialPageRoute(builder: (_) => LoginScreen(apiService: _apiService)),
+    );
+    if (!mounted || session == null) return;
+    _apiService?.authToken = session.accessToken;
+    _riderName = session.user.name;
+    _didAutoEnterSignedIn = true;
+    await _enterMainApp(initialSession: session, initialTabIndex: 1);
   }
 
   Future<void> _openHostRide() async {
@@ -332,9 +371,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                   Text('·', style: TextStyle(color: colors.outline)),
                   TextButton.icon(
-                    onPressed: () => Navigator.of(context).push(
-                      MaterialPageRoute(builder: (_) => const LoginScreen()),
-                    ),
+                    onPressed: _openLogin,
                     icon: const Icon(Icons.person_outline, size: 18),
                     label: const Text('Sign up or log in'),
                   ),

@@ -4,11 +4,14 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:ridesync/models/active_ride.dart';
+import 'package:ridesync/models/auth_session.dart';
+import 'package:ridesync/models/ride_history.dart';
 import 'package:ridesync/models/rider_position.dart';
 import 'package:ridesync/models/riding_crew.dart';
 import 'package:ridesync/screens/group_screen.dart';
 import 'package:ridesync/screens/host_ride_screen.dart';
 import 'package:ridesync/screens/join_ride_screen.dart';
+import 'package:ridesync/screens/login_screen.dart';
 import 'package:ridesync/screens/profile_screen.dart';
 import 'package:ridesync/screens/ride_map_screen.dart';
 import 'package:ridesync/screens/rides_screen.dart';
@@ -35,6 +38,7 @@ class MainScreen extends StatefulWidget {
     this.mapSearchService,
     this.initialServerUrl,
     this.initialActiveRide,
+    this.initialAuthSession,
     this.initialTabIndex = 0,
     this.themeMode = ThemeMode.system,
     this.onThemeModeChanged,
@@ -49,6 +53,7 @@ class MainScreen extends StatefulWidget {
   final MapSearchService? mapSearchService;
   final String? initialServerUrl;
   final ActiveRide? initialActiveRide;
+  final AuthSession? initialAuthSession;
   final int initialTabIndex;
   final ThemeMode themeMode;
   final ValueChanged<ThemeMode>? onThemeModeChanged;
@@ -62,6 +67,10 @@ class _MainScreenState extends State<MainScreen> {
 
   int _selectedIndex = 0;
   ActiveRide? _activeRide;
+  AuthSession? _authSession;
+  RideHistoryData? _rideHistory;
+  bool _isLoadingHistory = false;
+  String? _historyError;
   List<RiderPosition> _liveRiders = const [];
   String _riderName = AppPreferences.defaultRiderName;
   late String _serverUrl;
@@ -78,13 +87,22 @@ class _MainScreenState extends State<MainScreen> {
   void initState() {
     super.initState();
     _activeRide = widget.initialActiveRide;
+    _authSession = widget.initialAuthSession;
+    if (_authSession != null) {
+      _riderName = _authSession!.user.name;
+    }
     _selectedIndex = _activeRide != null ? 0 : widget.initialTabIndex;
     _serverUrl =
         widget.apiService?.cleanBaseUrl ??
         widget.initialServerUrl ??
         AppPreferences.buildApiBaseUrl;
     if (widget.apiService == null) {
-      _ownedApiService = RideApiService(baseUrl: _serverUrl);
+      _ownedApiService = RideApiService(
+        baseUrl: _serverUrl,
+        authToken: _authSession?.accessToken,
+      );
+    } else if (_authSession != null) {
+      widget.apiService!.authToken = _authSession!.accessToken;
     }
     if (widget.mapSearchService == null) {
       _ownedSearchService = MapSearchService();
@@ -95,6 +113,10 @@ class _MainScreenState extends State<MainScreen> {
       _loadSavedSettings();
     } else if (widget.initialActiveRide == null) {
       _restoreSavedRideOnly();
+    }
+    if (_authSession != null) {
+      unawaited(_verifyAuthSession());
+      unawaited(_refreshRideHistory());
     }
   }
 
@@ -147,13 +169,20 @@ class _MainScreenState extends State<MainScreen> {
     try {
       final savedUrl = await _prefs.loadServerUrl();
       final savedName = await _prefs.loadRiderName();
+      final savedSession = _authSession == null
+          ? await _prefs.loadAuthSession()
+          : null;
       final savedRide = widget.initialActiveRide == null
           ? await _prefs.loadActiveRide()
           : null;
       if (!mounted) return;
 
       var changed = false;
-      if (savedName != null &&
+      if (savedSession != null) {
+        _authSession = savedSession;
+        _riderName = savedSession.user.name;
+        changed = true;
+      } else if (savedName != null &&
           savedName.trim().isNotEmpty &&
           savedName != _riderName) {
         _riderName = savedName.trim();
@@ -163,9 +192,14 @@ class _MainScreenState extends State<MainScreen> {
           savedUrl.trim().isNotEmpty &&
           savedUrl != _serverUrl) {
         _ownedApiService?.dispose();
-        _ownedApiService = RideApiService(baseUrl: savedUrl);
+        _ownedApiService = RideApiService(
+          baseUrl: savedUrl,
+          authToken: _authSession?.accessToken,
+        );
         _serverUrl = _ownedApiService!.cleanBaseUrl;
         changed = true;
+      } else if (_authSession != null) {
+        _apiService.authToken = _authSession!.accessToken;
       }
       if (savedRide != null && _activeRide == null) {
         _activeRide = savedRide;
@@ -175,8 +209,102 @@ class _MainScreenState extends State<MainScreen> {
       if (changed) {
         setState(() {});
       }
+      if (savedSession != null) {
+        unawaited(_verifyAuthSession());
+        unawaited(_refreshRideHistory());
+      }
     } catch (_) {
       // Ignore storage errors on unsupported platforms / headless tests.
+    }
+  }
+
+  Future<void> _refreshRideHistory() async {
+    if (_authSession == null || !_apiService.isEnabled) return;
+    if (mounted) {
+      setState(() {
+        _isLoadingHistory = true;
+        _historyError = null;
+      });
+    }
+    try {
+      final data = await _apiService.fetchRideHistory();
+      if (!mounted) return;
+      setState(() {
+        _rideHistory = data;
+        _isLoadingHistory = false;
+        _historyError = null;
+      });
+    } on RideApiException catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _isLoadingHistory = false;
+        _historyError = error.message;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _isLoadingHistory = false;
+        _historyError = 'Could not load ride history right now.';
+      });
+    }
+  }
+
+  Future<void> _verifyAuthSession() async {
+    if (_authSession == null || !_apiService.isEnabled) return;
+    try {
+      final me = await _apiService.fetchMe();
+      if (!mounted || _authSession == null) return;
+      if (me.name != _authSession!.user.name || me.name != _riderName) {
+        final refreshed = _authSession!.copyWith(user: me);
+        setState(() {
+          _authSession = refreshed;
+          _riderName = me.name;
+        });
+        unawaited(_prefs.saveAuthSession(refreshed));
+      }
+    } on RideApiException catch (error) {
+      if (!mounted) return;
+      if (error.statusCode == 401) {
+        _apiService.authToken = null;
+        setState(() {
+          _authSession = null;
+        });
+        unawaited(_prefs.clearAuthSession());
+      }
+    } catch (_) {
+      // Ignore transient offline failures; keep cached session.
+    }
+  }
+
+  Future<void> _openLogin() async {
+    final session = await Navigator.of(context).push<AuthSession>(
+      MaterialPageRoute(builder: (_) => LoginScreen(apiService: _apiService)),
+    );
+    if (!mounted || session == null) return;
+    _apiService.authToken = session.accessToken;
+    setState(() {
+      _authSession = session;
+      _riderName = session.user.name;
+    });
+    unawaited(_refreshRideHistory());
+  }
+
+  Future<void> _logout() async {
+    try {
+      await _apiService.logout();
+    } catch (_) {
+      // Clear local session even if server is unreachable.
+    }
+    _apiService.authToken = null;
+    await _prefs.clearAuthSession();
+    if (!mounted) return;
+    setState(() {
+      _authSession = null;
+      _rideHistory = null;
+      _historyError = null;
+    });
+    if (Navigator.of(context).canPop()) {
+      Navigator.of(context).pop();
     }
   }
 
@@ -204,10 +332,25 @@ class _MainScreenState extends State<MainScreen> {
   void _updateRiderName(String rawName) {
     final clean = rawName.trim();
     if (clean.isEmpty || clean == _riderName) return;
+    final session = _authSession;
     setState(() {
       _riderName = clean;
+      if (session != null) {
+        _authSession = session.copyWith(
+          user: session.user.copyWith(name: clean),
+        );
+      }
     });
-    _prefs.saveRiderName(clean).catchError((_) {});
+    if (_authSession != null) {
+      _prefs.saveAuthSession(_authSession!).catchError((_) {});
+      if (_apiService.isEnabled) {
+        unawaited(
+          _apiService.updateMyName(clean).catchError((_) => _authSession!.user),
+        );
+      }
+    } else {
+      _prefs.saveRiderName(clean).catchError((_) {});
+    }
   }
 
   // Opens HostRideScreen or JoinRideScreen and switches to Map when a ride starts.
@@ -227,6 +370,7 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   Future<void> _openHostRide({
+    String? initialDestination,
     PlaceResult? initialPlace,
     RoutePreview? initialRoute,
     LatLng? nearPoint,
@@ -237,6 +381,8 @@ class _MainScreenState extends State<MainScreen> {
         apiService: _apiService,
         searchService: _searchService,
         hostName: _riderName,
+        isSignedIn: _authSession != null,
+        initialDestination: initialDestination,
         initialPlace: initialPlace,
         initialRoute: initialRoute,
         nearPoint: nearPoint,
@@ -258,6 +404,8 @@ class _MainScreenState extends State<MainScreen> {
         ending.currentUserId != null &&
         _apiService.isEnabled) {
       _notifyBackendEndRide(ending);
+    } else if (_authSession != null) {
+      unawaited(_refreshRideHistory());
     }
   }
 
@@ -267,16 +415,33 @@ class _MainScreenState extends State<MainScreen> {
         code: ride.joinCode,
         hostId: ride.currentUserId!,
       );
+      if (mounted && _authSession != null) {
+        unawaited(_refreshRideHistory());
+      }
     } on RideApiException catch (error) {
       if (!mounted) return;
       // 404/409 simply means the ride was already missing or ended.
-      if (error.statusCode == 404 || error.statusCode == 409) return;
+      if (error.statusCode == 404 || error.statusCode == 409) {
+        if (_authSession != null) unawaited(_refreshRideHistory());
+        return;
+      }
       ScaffoldMessenger.maybeOf(context)?.showSnackBar(
         SnackBar(
           content: Text('Ended locally (server error: ${error.message})'),
         ),
       );
     }
+  }
+
+  Future<void> _rideAgain(PastRide pastRide) {
+    final point = pastRide.destinationPoint;
+    final place = point == null
+        ? null
+        : PlaceResult(name: pastRide.destination, subtitle: '', point: point);
+    return _openHostRide(
+      initialDestination: pastRide.destination,
+      initialPlace: place,
+    );
   }
 
   @override
@@ -298,7 +463,11 @@ class _MainScreenState extends State<MainScreen> {
               nearPoint: nearPoint,
             ),
             onJoinRide: () => _openRideFlow(
-              JoinRideScreen(apiService: _apiService, riderName: _riderName),
+              JoinRideScreen(
+                apiService: _apiService,
+                riderName: _riderName,
+                isSignedIn: _authSession != null,
+              ),
             ),
             locationService: widget.locationService,
             batteryService: widget.batteryService,
@@ -318,8 +487,19 @@ class _MainScreenState extends State<MainScreen> {
             onOpenMap: () => setState(() => _selectedIndex = 0),
             onHostRide: () => _openHostRide(),
             onJoinRide: () => _openRideFlow(
-              JoinRideScreen(apiService: _apiService, riderName: _riderName),
+              JoinRideScreen(
+                apiService: _apiService,
+                riderName: _riderName,
+                isSignedIn: _authSession != null,
+              ),
             ),
+            isSignedIn: _authSession != null,
+            history: _rideHistory,
+            isLoadingHistory: _isLoadingHistory,
+            historyError: _historyError,
+            onRefreshHistory: _refreshRideHistory,
+            onOpenLogin: _openLogin,
+            onRideAgain: _rideAgain,
           ),
           GroupScreen(
             activeRide: _activeRide,
@@ -334,6 +514,10 @@ class _MainScreenState extends State<MainScreen> {
             riderName: _riderName,
             onRiderNameChanged: _updateRiderName,
             serverUrl: _serverUrl,
+            authSession: _authSession,
+            stats: _rideHistory?.stats,
+            onOpenLogin: _openLogin,
+            onLogout: _logout,
             onServerUrlChanged:
                 widget.apiService == null &&
                     (kDebugMode || _serverUrl.trim().isEmpty)

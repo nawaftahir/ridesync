@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:ridesync/models/auth_session.dart';
+import 'package:ridesync/models/ride_history.dart';
 import 'package:ridesync/screens/login_screen.dart';
 import 'package:ridesync/services/app_preferences.dart';
 import 'package:ridesync/services/ride_api_service.dart';
 
-// Rider profile page with editable name, theme switcher, server config, and login link.
+// Rider profile page with account status, rider stats, editable name, theme switcher, and server config.
 class ProfileScreen extends StatelessWidget {
   const ProfileScreen({
     super.key,
@@ -13,6 +15,10 @@ class ProfileScreen extends StatelessWidget {
     this.onRiderNameChanged,
     this.serverUrl = AppPreferences.buildApiBaseUrl,
     this.onServerUrlChanged,
+    this.authSession,
+    this.stats,
+    this.onOpenLogin,
+    this.onLogout,
   });
 
   final ThemeMode themeMode;
@@ -21,6 +27,10 @@ class ProfileScreen extends StatelessWidget {
   final ValueChanged<String>? onRiderNameChanged;
   final String serverUrl;
   final ValueChanged<String>? onServerUrlChanged;
+  final AuthSession? authSession;
+  final RiderStats? stats;
+  final VoidCallback? onOpenLogin;
+  final VoidCallback? onLogout;
 
   IconData get _themeIcon => switch (themeMode) {
     ThemeMode.system => Icons.brightness_auto_outlined,
@@ -73,19 +83,52 @@ class ProfileScreen extends StatelessWidget {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(
-                            riderName.trim().isEmpty
-                                ? AppPreferences.defaultRiderName
-                                : riderName.trim(),
-                            style: text.titleLarge?.copyWith(
-                              fontWeight: FontWeight.w800,
-                            ),
+                          Row(
+                            children: [
+                              Flexible(
+                                child: Text(
+                                  riderName.trim().isEmpty
+                                      ? AppPreferences.defaultRiderName
+                                      : riderName.trim(),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: text.titleLarge?.copyWith(
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                              ),
+                              if (authSession != null) ...[
+                                const SizedBox(width: 8),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                    vertical: 2,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: colors.primaryContainer,
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  child: Text(
+                                    'Signed in',
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w800,
+                                      color: colors.onPrimaryContainer,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ],
                           ),
                           const SizedBox(height: 4),
                           Text(
-                            onRiderNameChanged == null
-                                ? 'Guest rider · Not signed in'
-                                : 'Tap to change display name',
+                            authSession != null
+                                ? authSession!.user.email
+                                : (onRiderNameChanged == null
+                                      ? 'Guest rider · Not signed in'
+                                      : 'Guest rider · Tap to change name'),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                             style: text.bodyMedium?.copyWith(
                               color: colors.onSurfaceVariant,
                             ),
@@ -106,12 +149,58 @@ class ProfileScreen extends StatelessWidget {
           ),
           const SizedBox(height: 16),
 
-          FilledButton.icon(
-            onPressed: () => Navigator.of(context)
-                .push(MaterialPageRoute(builder: (_) => const LoginScreen())),
-            icon: const Icon(Icons.person_add),
-            label: const Text('Sign up or log in'),
-          ),
+          if (authSession != null && stats != null) ...[
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 16,
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: _ProfileStatItem(
+                        label: 'Rides',
+                        value: '${stats!.totalRides}',
+                      ),
+                    ),
+                    Expanded(
+                      child: _ProfileStatItem(
+                        label: 'Hosted',
+                        value: '${stats!.hostedRides}',
+                      ),
+                    ),
+                    Expanded(
+                      child: _ProfileStatItem(
+                        label: 'Time ridden',
+                        value: stats!.totalMinutes == 0
+                            ? '0 min'
+                            : stats!.formattedTotalTime,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
+
+          if (authSession != null)
+            OutlinedButton.icon(
+              onPressed: onLogout,
+              icon: const Icon(Icons.logout),
+              label: const Text('Log out'),
+            )
+          else
+            FilledButton.icon(
+              onPressed:
+                  onOpenLogin ??
+                  () => Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const LoginScreen()),
+                  ),
+              icon: const Icon(Icons.person_add),
+              label: const Text('Sign up or log in'),
+            ),
           const SizedBox(height: 20),
 
           Card(
@@ -385,6 +474,39 @@ class _ServerConfigDialogState extends State<_ServerConfigDialog> {
         FilledButton(
           onPressed: () => Navigator.of(context).pop(_controller.text.trim()),
           child: const Text('Save'),
+        ),
+      ],
+    );
+  }
+}
+
+class _ProfileStatItem extends StatelessWidget {
+  const _ProfileStatItem({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          value,
+          style: text.titleLarge?.copyWith(
+            fontWeight: FontWeight.w800,
+            color: colors.primary,
+          ),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          label,
+          style: text.bodySmall?.copyWith(
+            color: colors.onSurfaceVariant,
+            fontWeight: FontWeight.w600,
+          ),
         ),
       ],
     );

@@ -6,12 +6,14 @@ class JoinRideScreen extends StatefulWidget {
     super.key,
     this.apiService,
     this.riderName = 'Rider',
+    this.isSignedIn = false,
     this.initialCode,
     this.autoJoin = false,
   });
 
   final RideApiService? apiService;
   final String riderName;
+  final bool isSignedIn;
   final String? initialCode;
   final bool autoJoin;
 
@@ -96,6 +98,7 @@ class _JoinRideScreenState extends State<JoinRideScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
     final text = Theme.of(context).textTheme;
 
     return Scaffold(
@@ -108,19 +111,52 @@ class _JoinRideScreenState extends State<JoinRideScreen> {
             Text('Enter Code from a host to join.', style: text.bodyLarge),
             const SizedBox(height: 16),
 
-            TextField(
-              controller: _nameController,
-              textCapitalization: TextCapitalization.words,
-              maxLength: 30,
-              decoration: const InputDecoration(
-                labelText: 'Your name (optional)',
-                hintText: 'Defaults to Rider',
-                prefixIcon: Icon(Icons.person_outline),
-                counterText: '',
-                border: OutlineInputBorder(),
+            if (widget.isSignedIn) ...[
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 12,
+                ),
+                decoration: BoxDecoration(
+                  color: colors.primaryContainer.withValues(alpha: 0.6),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.verified_user_outlined,
+                      size: 18,
+                      color: colors.onPrimaryContainer,
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        'Joining as ${widget.riderName}',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w700,
+                          color: colors.onPrimaryContainer,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            ),
-            const SizedBox(height: 16),
+              const SizedBox(height: 16),
+            ] else ...[
+              TextField(
+                controller: _nameController,
+                textCapitalization: TextCapitalization.words,
+                maxLength: 30,
+                decoration: const InputDecoration(
+                  labelText: 'Your name (optional)',
+                  hintText: 'Defaults to Rider',
+                  prefixIcon: Icon(Icons.person_outline),
+                  counterText: '',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 16),
+            ],
 
             TextField(
               controller: _codeController,
