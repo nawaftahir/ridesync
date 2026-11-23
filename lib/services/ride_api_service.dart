@@ -4,6 +4,8 @@ import 'dart:io';
 
 import 'package:http/http.dart' as http;
 import 'package:ridesync/models/active_ride.dart';
+import 'package:ridesync/models/auth_session.dart';
+import 'package:ridesync/models/ride_history.dart';
 import 'package:ridesync/models/rider.dart';
 import 'package:ridesync/models/rider_position.dart';
 
@@ -77,6 +79,7 @@ class RideApiService {
     String baseUrl = const String.fromEnvironment('API_BASE_URL'),
     http.Client? client,
     this.timeout = const Duration(seconds: 6),
+    this.authToken,
   }) : cleanBaseUrl = _normalizeBaseUrl(baseUrl),
        _client = client ?? http.Client(),
        _ownsClient = client == null;
@@ -85,8 +88,17 @@ class RideApiService {
   final http.Client _client;
   final bool _ownsClient;
   final Duration timeout;
+  String? authToken;
 
   bool get isEnabled => cleanBaseUrl.isNotEmpty;
+
+  Map<String, String> _headers({bool json = false}) {
+    final token = authToken?.trim();
+    return {
+      if (json) 'Content-Type': 'application/json',
+      if (token != null && token.isNotEmpty) 'Authorization': 'Bearer $token',
+    };
+  }
 
   static String _normalizeBaseUrl(String raw) {
     var trimmed = raw.trim();
@@ -177,6 +189,99 @@ class RideApiService {
     );
   }
 
+  Future<AuthSession> register({
+    required String name,
+    required String email,
+    required String password,
+  }) async {
+    final response = await _send(
+      () => _client.post(
+        _uri('/auth/register'),
+        headers: const {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'name': name.trim(),
+          'email': email.trim(),
+          'password': password,
+        }),
+      ),
+    );
+    if (response.statusCode != 201) {
+      throw _errorFromResponse(response);
+    }
+    final session = AuthSession.fromJson(_decodeJsonObject(response));
+    if (session == null) {
+      throw const RideApiException('Unexpected auth response from server.');
+    }
+    authToken = session.accessToken;
+    return session;
+  }
+
+  Future<AuthSession> login({
+    required String email,
+    required String password,
+  }) async {
+    final response = await _send(
+      () => _client.post(
+        _uri('/auth/login'),
+        headers: const {'Content-Type': 'application/json'},
+        body: jsonEncode({'email': email.trim(), 'password': password}),
+      ),
+    );
+    if (response.statusCode != 200) {
+      throw _errorFromResponse(response);
+    }
+    final session = AuthSession.fromJson(_decodeJsonObject(response));
+    if (session == null) {
+      throw const RideApiException('Unexpected auth response from server.');
+    }
+    authToken = session.accessToken;
+    return session;
+  }
+
+  Future<AuthUser> fetchMe() async {
+    final response = await _send(
+      () => _client.get(_uri('/auth/me'), headers: _headers()),
+    );
+    if (response.statusCode != 200) {
+      throw _errorFromResponse(response);
+    }
+    final user = AuthUser.fromJson(_decodeJsonObject(response));
+    if (user == null) {
+      throw const RideApiException('Unexpected profile response from server.');
+    }
+    return user;
+  }
+
+  Future<AuthUser> updateMyName(String name) async {
+    final response = await _send(
+      () => _client.patch(
+        _uri('/auth/me'),
+        headers: _headers(json: true),
+        body: jsonEncode({'name': name.trim()}),
+      ),
+    );
+    if (response.statusCode != 200) {
+      throw _errorFromResponse(response);
+    }
+    final user = AuthUser.fromJson(_decodeJsonObject(response));
+    if (user == null) {
+      throw const RideApiException('Unexpected profile response from server.');
+    }
+    return user;
+  }
+
+  Future<void> logout() async {
+    final token = authToken?.trim();
+    if (token == null || token.isEmpty) return;
+    try {
+      await _send(
+        () => _client.post(_uri('/auth/logout'), headers: _headers()),
+      );
+    } finally {
+      authToken = null;
+    }
+  }
+
   Future<ActiveRide> createRide({
     required String destination,
     required String hostName,
@@ -196,7 +301,7 @@ class RideApiService {
     final response = await _send(
       () => _client.post(
         _uri('/rides'),
-        headers: const {'Content-Type': 'application/json'},
+        headers: _headers(json: true),
         body: jsonEncode(body),
       ),
     );
@@ -230,7 +335,7 @@ class RideApiService {
     final response = await _send(
       () => _client.post(
         _uri('/rides/$cleanCode/join'),
-        headers: const {'Content-Type': 'application/json'},
+        headers: _headers(json: true),
         body: jsonEncode(body),
       ),
     );
@@ -274,7 +379,7 @@ class RideApiService {
     final response = await _send(
       () => _client.post(
         _uri('/rides/$cleanCode/position'),
-        headers: const {'Content-Type': 'application/json'},
+        headers: _headers(json: true),
         body: jsonEncode(body),
       ),
     );
@@ -293,7 +398,7 @@ class RideApiService {
     final response = await _send(
       () => _client.post(
         _uri('/rides/$cleanCode/alert'),
-        headers: const {'Content-Type': 'application/json'},
+        headers: _headers(json: true),
         body: jsonEncode({
           'user_id': userId,
           'alert_type': alertType,
@@ -367,13 +472,23 @@ class RideApiService {
     final response = await _send(
       () => _client.post(
         _uri('/rides/$cleanCode/end'),
-        headers: const {'Content-Type': 'application/json'},
+        headers: _headers(json: true),
         body: jsonEncode({'host_id': hostId}),
       ),
     );
     if (response.statusCode != 200) {
       throw _errorFromResponse(response);
     }
+  }
+
+  Future<RideHistoryData> fetchRideHistory() async {
+    final response = await _send(
+      () => _client.get(_uri('/rides/history'), headers: _headers()),
+    );
+    if (response.statusCode != 200) {
+      throw _errorFromResponse(response);
+    }
+    return RideHistoryData.fromJson(_decodeJsonObject(response));
   }
 
   void dispose() {

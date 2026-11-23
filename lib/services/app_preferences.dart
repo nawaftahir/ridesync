@@ -1,18 +1,20 @@
 import 'dart:convert';
 
 import 'package:ridesync/models/active_ride.dart';
+import 'package:ridesync/models/auth_session.dart';
 import 'package:ridesync/models/riding_crew.dart';
 import 'package:ridesync/services/map_search_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-// Saves simple rider settings (display name, backend URL, recent searches,
-// riding crews, and active ride state) locally on the phone.
+// Saves simple rider settings (display name, backend URL, auth session,
+// recent searches, riding crews, and active ride state) locally on the phone.
 class AppPreferences {
   static const String _serverUrlKey = 'server_url';
   static const String _riderNameKey = 'rider_name';
   static const String _recentPlacesKey = 'recent_places';
   static const String _activeRideKey = 'active_ride';
   static const String _crewsKey = 'riding_crews';
+  static const String _authSessionKey = 'auth_session';
   static const int _maxRecentPlaces = 8;
 
   // Injected at build time via `--dart-define=API_BASE_URL=...`
@@ -150,6 +152,38 @@ class AppPreferences {
         _crewsKey,
         jsonEncode(crews.map((c) => c.toJson()).toList(growable: false)),
       );
+    } catch (_) {
+      // Ignore storage failures.
+    }
+  }
+
+  Future<AuthSession?> loadAuthSession() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_authSessionKey);
+      if (raw == null || raw.isEmpty) return null;
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map<String, dynamic>) return null;
+      return AuthSession.fromJson(decoded);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> saveAuthSession(AuthSession session) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_authSessionKey, jsonEncode(session.toJson()));
+      await prefs.setString(_riderNameKey, session.user.name);
+    } catch (_) {
+      // Ignore storage failures.
+    }
+  }
+
+  Future<void> clearAuthSession() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_authSessionKey);
     } catch (_) {
       // Ignore storage failures.
     }
